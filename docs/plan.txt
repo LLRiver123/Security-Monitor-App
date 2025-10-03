@@ -1,0 +1,10 @@
+The project will have 3 main parts:
+- Agent: Interact with normal monitoring tool to generate response. Will intergrate with ml model later
+- UI: Normal UI work with REST API to seperate Agent and UI. Might aswell use ELECTRON
+- ML: Will include notesbook for testing, models, data logic....
+
+Plan:
+- W1-2: Work with the agent and try to develop a simple UI
+- W3-4: Upgrade UI and fix buf agent
+- W5-7: Try fine tune or train model and then integrate it into the app logic
+- Then...: Fix bug and deploy
