@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Security Monitor UI</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https: 'unsafe-inline' 'unsafe-eval'">
+    <!-- React via CDN for quick demo -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <style>
+      body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 16px; }
+      .alert { border: 1px solid #ddd; padding: 10px; margin-bottom: 8px; border-radius: 6px; }
+      .high { border-left: 6px solid #d9534f; }
+      .medium { border-left: 6px solid #f0ad4e; }
+      .low { border-left: 6px solid #5bc0de; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script src="index.js"></script>
+  </body>
+</html>

@@ -1,0 +1,91 @@
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+pip-wheel-metadata/
+
+# Virtualenvs
+venv/
+.venv/
+env/
+venv-*/
+
+# Packaging / installers
+*.whl
+*.egg
+*.spec
+
+# Logs / runtime data
+*.log
+logs/
+*.jsonl
+data/
+tmp/
+*.cache
+
+# Secrets / env files
+.env
+.env.local
+secrets.json
+credentials.json
+
+# Python test / coverage
+.coverage
+.htmlcov/
+.pytest_cache/
+
+# SQLite / DB files
+*.db
+*.sqlite
+*.sqlite3
+
+# ---- ML artifacts (usually large; use Git LFS if you must store them) ----
+/ml/
+/agent/ml/models/
+/ml/embed_model/
+/ml/*.joblib
+*.joblib
+*.pkl
+*.onnx
+*.pt
+*.pth
+*.bin
+models/
+
+# ---- Node / Electron ----
+node_modules/
+ui/node_modules/
+ui/dist/
+ui/build/
+npm-debug.log*
+yarn-error.log*
+
+# Electron packaging output
+release/
+*.AppImage
+*.exe
+*.dmg
+*.deb
+*.rpm
+*.asar
+
+# ---- Misc ----
+*.lock
+*.lnk
+.vagrant/
+.idea/
+
+# If you decide to keep small model artifacts in repo, remove /ml/ from .gitignore and use Git LFS:
+# git lfs track "ml/*.joblib"
