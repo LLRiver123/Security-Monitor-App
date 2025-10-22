@@ -1,53 +1,91 @@
-const e = React.createElement
+const startBtn = document.getElementById('start')
+const stopBtn = document.getElementById('stop')
+const logEl = document.getElementById('log')
+const pendingEl = document.getElementById('pending')
+const controlUrlInput = document.getElementById('controlUrlInput')
+const connectControlBtn = document.getElementById('connectControl')
 
-function AlertItem({ alert }) {
-  const sev = (alert.severity || 'low').toLowerCase()
-  return e('div', { className: `alert ${sev}` },
-    e('div', null, e('strong', null, alert.message)),
-    e('div', null, `Severity: ${alert.severity} | Confidence: ${alert.confidence}`),
-    e('pre', null, JSON.stringify(alert.fields || {}, null, 2))
-  )
+let controlUrl = null
+
+function renderPending(list) {
+  if (!list || list.length === 0) {
+    pendingEl.innerHTML = '<i>No pending requests</i>'
+    return
+  }
+  pendingEl.innerHTML = ''
+  list.forEach((r) => {
+    const div = document.createElement('div')
+    div.style = 'border:1px solid #ccc;padding:8px;margin:6px;'
+    div.innerHTML = `<b>id:</b> ${r.id} <b>path:</b> ${r.path} <b>status:</b> ${r.status}`
+    const btn = document.createElement('button')
+    btn.textContent = 'Approve'
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      const res = await window.agentAPI.approve(r.id)
+      logEl.textContent += `Approve response: ${JSON.stringify(res)}\n`
+      fetchPendingOnce()
+    })
+    div.appendChild(document.createTextNode(' '))
+    div.appendChild(btn)
+    pendingEl.appendChild(div)
+  })
 }
 
-function App() {
-  const [alerts, setAlerts] = React.useState([])
-
-  React.useEffect(() => {
-    let ws
-    // First fetch recent alerts
-    fetch('http://127.0.0.1:8000/alerts')
-      .then(r => r.json())
-      .then(j => {
-        if (j && Array.isArray(j.alerts)) {
-          setAlerts(j.alerts)
-        }
-        // then open websocket for live updates
-        ws = new WebSocket('ws://127.0.0.1:8000/ws/alerts')
-        ws.onopen = () => console.log('ws open')
-        ws.onmessage = (evt) => {
-          try {
-            const data = JSON.parse(evt.data)
-            const item = data.alert
-            setAlerts(prev => [item].concat(prev).slice(0, 200))
-          } catch (err) {
-            console.error('ws parse', err)
-          }
-        }
-        ws.onerror = (e) => console.error('ws error', e)
-        ws.onclose = () => console.log('ws closed')
-      })
-      .catch(err => {
-        console.error('failed to fetch alerts', err)
-        // still open websocket
-        ws = new WebSocket('ws://127.0.0.1:8000/ws/alerts')
-      })
-    return () => ws && ws.close()
-  }, [])
-
-  return e('div', null,
-    e('h2', null, 'Security Monitor Alerts'),
-    e('div', null, alerts.map(a => e(AlertItem, { key: a.id, alert: a })))
-  )
+async function fetchPendingOnce() {
+  try {
+    if (controlUrl) {
+      const r = await fetch(controlUrl + '/pending')
+      const body = await r.json()
+      if (body && body.pending) renderPending(body.pending)
+      else pendingEl.innerHTML = `<i>Error: ${JSON.stringify(body)}</i>`
+      return
+    }
+    if (window.agentAPI && window.agentAPI.getPending) {
+      const res = await window.agentAPI.getPending()
+      if (res && res.pending) renderPending(res.pending)
+      else pendingEl.innerHTML = `<i>Error: ${JSON.stringify(res)}</i>`
+      return
+    }
+    pendingEl.innerHTML = '<i>No control API available</i>'
+  } catch (e) {
+    pendingEl.innerHTML = `<i>Request error: ${e}</i>`
+  }
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(e(App))
+// Poll every 3s
+setInterval(() => {
+  fetchPendingOnce()
+}, 3000)
+
+window.agentAPI.onControlUrl((url) => {
+  controlUrl = url
+  logEl.textContent += `[Control URL] ${url}\n`
+})
+
+startBtn.addEventListener('click', () => {
+  window.agentAPI.start()
+})
+
+stopBtn.addEventListener('click', () => {
+  window.agentAPI.stop()
+})
+
+window.agentAPI.onLog((data) => {
+  logEl.textContent += data + '\n'
+  logEl.scrollTop = logEl.scrollHeight
+})
+
+window.agentAPI.onExit((info) => {
+  logEl.textContent += `[Agent exited] code=${info.code} signal=${info.signal}\n`
+})
+
+// initial fetch
+fetchPendingOnce()
+
+connectControlBtn.addEventListener('click', () => {
+  const v = controlUrlInput.value.trim()
+  if (!v) return
+  controlUrl = v.replace(/\/$/, '')
+  logEl.textContent += `[Connected control API] ${controlUrl}\n`
+  fetchPendingOnce()
+})

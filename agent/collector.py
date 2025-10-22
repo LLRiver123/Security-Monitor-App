@@ -61,40 +61,13 @@ def sysmon_event_stream(batch_size=5, poll_delay=1.0):
                         name = d.attrib.get("Name")
                         data[name] = d.text
 
-                    # Normalize common fields into predictable keys and formats
-                    norm = {}
-                    # Keep original data dict for reference
-                    norm.update(data)
-
-                    # Normalize image paths and parent image
-                    image = (data.get("Image") or "")
-                    parent = (data.get("ParentImage") or "")
-                    norm["Image"] = image
-                    norm["ParentImage"] = parent
-                    norm["ImageLower"] = image.lower() if image else ""
-                    norm["ParentImageLower"] = parent.lower() if parent else ""
-
-                    # Command line and hashes
-                    cmd = (data.get("CommandLine") or "")
-                    norm["CommandLine"] = cmd
-                    norm["Hashes"] = data.get("Hashes") or ""
-
-                    # Network fields (if present)
-                    for net_field in ("SourceIp", "DestinationIp", "DestinationPort", "SourcePort"):
-                        if net_field in data:
-                            norm[net_field] = data.get(net_field)
-
-                    # User field
-                    if "User" in data:
-                        norm["User"] = data.get("User")
-
                     yield {
                         "event_id": event_id,
                         "time": time_iso,
                         "source": source_node.attrib.get("Name") if source_node is not None else None,
                         "computer": comp_node.text if comp_node is not None else None,
                         "xml": xml,
-                        "data": norm,
+                        "data": data,
                     }
 
                 except Exception as e:

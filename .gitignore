@@ -54,6 +54,7 @@ credentials.json
 # ---- ML artifacts (usually large; use Git LFS if you must store them) ----
 /ml/
 /agent/ml/models/
+/agent/ai/benign_centroid.npy
 /ml/embed_model/
 /ml/*.joblib
 *.joblib
