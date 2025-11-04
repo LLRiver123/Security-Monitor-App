@@ -1,12 +1,42 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+/**
+ * Secure API bridge between renderer and main process
+ * Uses contextBridge for proper context isolation
+ */
 contextBridge.exposeInMainWorld('agentAPI', {
-	start: () => ipcRenderer.send('start-agent'),
-	stop: () => ipcRenderer.send('stop-agent'),
-	onLog: (cb) => ipcRenderer.on('agent-log', (e, data) => cb(data)),
-	onExit: (cb) => ipcRenderer.on('agent-exit', (e, data) => cb(data)),
+	// Agent control
+	start: () => ipcRenderer.invoke('agent-start'),
+	stop: () => ipcRenderer.invoke('agent-stop'),
+	getStatus: () => ipcRenderer.invoke('agent-status'),
+	checkHealth: () => ipcRenderer.invoke('agent-health'),
+	
+	// Remediation actions
 	getPending: () => ipcRenderer.invoke('agent-get-pending'),
 	approve: (id) => ipcRenderer.invoke('agent-approve', id),
-	onControlUrl: (cb) => ipcRenderer.on('control-url', (e, url) => cb(url)),
+	reject: (id) => ipcRenderer.invoke('agent-reject', id),
+	
+	// Event listeners (one-way from main to renderer)
+	onLog: (callback) => {
+		const subscription = (event, data) => callback(data)
+		ipcRenderer.on('agent-log', subscription)
+		
+		// Return unsubscribe function
+		return () => ipcRenderer.removeListener('agent-log', subscription)
+	},
+	
+	onControlUrl: (callback) => {
+		const subscription = (event, data) => callback(data)
+		ipcRenderer.on('control-url', subscription)
+		return () => ipcRenderer.removeListener('control-url', subscription)
+	},
+	
+	onAgentExit: (callback) => {
+		const subscription = (event, data) => callback(data)
+		ipcRenderer.on('agent-exit', subscription)
+		return () => ipcRenderer.removeListener('agent-exit', subscription)
+	}
 })
 
+// Log that preload script loaded successfully
+console.log('Preload script loaded successfully')
