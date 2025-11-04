@@ -162,14 +162,21 @@ class ControlServer:
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
                 self.wfile.write(json.dumps(data).encode())
-            
+
             def _read_json(self):
                 """Read JSON body from request"""
                 content_length = int(self.headers.get('Content-Length', 0))
                 if content_length == 0:
-                    return {}
-                body = self.rfile.read(content_length)
-                return json.loads(body.decode())
+                    return {} # <--- TRẢ VỀ DICT RỖNG NẾU BODY RỖNG HOẶC THIẾU CONTENT-LENGTH
+                try:
+                    body = self.rfile.read(content_length)
+                    return json.loads(body.decode())
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to decode JSON body: {e}")
+                    raise # Ném lại lỗi để được bắt trong do_POST
+                except Exception as e:
+                    logger.error(f"Error reading request body: {e}")
+                    raise
             
             def do_OPTIONS(self):
                 """Handle CORS preflight"""
@@ -224,10 +231,14 @@ class ControlServer:
                         if not request:
                             self.send_error(404, f"Request {req_id} not found")
                             return
-                        
+                        # Thêm kiểm tra trạng thái
+                        if request.status != "pending":
+                            self.send_error(400, f"Request {req_id} status is already {request.status}")
+                            return
+                            
                         request.status = "approved"
                         logger.info(f"Request {req_id} approved")
-                    
+                        
                     self._send_json({
                         'success': True,
                         'id': req_id,
@@ -245,7 +256,10 @@ class ControlServer:
                         if not request:
                             self.send_error(404, f"Request {req_id} not found")
                             return
-                        
+                        # Thêm kiểm tra trạng thái
+                        if request.status != "pending":
+                            self.send_error(400, f"Request {req_id} status is already {request.status}")
+                            return
                         request.status = "rejected"
                         logger.info(f"Request {req_id} rejected")
                     

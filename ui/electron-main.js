@@ -300,6 +300,14 @@ function httpRequest(method, url, body = null, timeout = 5000) {
 			const parsed = new URL(url)
 			const httpMod = parsed.protocol === 'https:' ? require('https') : require('http')
 			
+			// 1. Chuẩn bị Body (chuyển thành chuỗi JSON và tính độ dài)
+            let jsonBody = null
+            let contentLength = 0
+            if (body) {
+                jsonBody = JSON.stringify(body)
+                contentLength = Buffer.byteLength(jsonBody, 'utf8') // <-- Tính Content-Length
+            }
+
 			const opts = {
 				method: method,
 				hostname: parsed.hostname,
@@ -310,7 +318,12 @@ function httpRequest(method, url, body = null, timeout = 5000) {
 				},
 				timeout: timeout
 			}
-			
+
+			// 2. Thêm Content-Length chỉ khi có Body
+            if (jsonBody) {
+                opts.headers['Content-Length'] = contentLength
+            }
+
 			// Attach auth token if available
 			if (controlToken) {
 				opts.headers['X-Auth-Token'] = controlToken
@@ -339,7 +352,10 @@ function httpRequest(method, url, body = null, timeout = 5000) {
 			if (body) {
 				req.write(JSON.stringify(body))
 			}
-			
+			// 3. Ghi Body
+            if (jsonBody) { // <-- Ghi jsonBody đã tính Content-Length
+                req.write(jsonBody)
+            }
 			req.end()
 		} catch (e) {
 			reject(e)

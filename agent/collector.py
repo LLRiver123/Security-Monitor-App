@@ -3,7 +3,7 @@ import win32evtlog
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-def sysmon_event_stream(batch_size=5, poll_delay=1.0):
+def sysmon_event_stream(batch_size=100, poll_delay=0.1):
     """
     Yield normalized Sysmon events as dicts:
       {
