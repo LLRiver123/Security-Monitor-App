@@ -4,22 +4,35 @@ import json
 import signal
 import logging
 import traceback
+import threading
+import queue
+import time
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Set
 
-from agent.collector import sysmon_event_stream
+from agent.collector import sysmon_event_stream_reverse
 from agent.rules import suspicious_rule
 from agent import resource_path
 from agent.notifier import notify_console, notify_toast, write_alert_log
-from agent.remediator import confirm_and_disable_path
+from agent.remediator import confirm_and_disable_path, queue_user_remediation
 from agent.control import ControlServer, set_control_server
 from agent.ai.analyzer import analyze_event
+from agent.remediator import check_pending_and_execute
 
 # Setup logging
 LOG_DIR = Path(__file__).parent / 'agent'
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / 'agent.log'
+AI_PROCESSING_QUEUE = queue.Queue()
+NUM_AI_WORKER = 2
+REVERSE_POLL_INTERVAL = 5
+control_server = None
+shutdown_requested = False
+recent_remediations: Set[str] = set()
+REMEDIATION_CACHE_SIZE = 1000
+rejected_remediations: Set[str] = set()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +51,85 @@ shutdown_requested = False
 recent_remediations: Set[str] = set()
 REMEDIATION_CACHE_SIZE = 1000
 
+def _execute_remediation_logic(alert: str, event: dict) -> None:
+    """
+    Phân loại cảnh báo và gửi yêu cầu System Remediation (User) hoặc File Remediation.
+    """
+    global recent_remediations, REMEDIATION_CACHE_SIZE, rejected_remediations
+    event_id = event.get('event_id', 'UNKNOWN')
+    event_time = event.get('time', 'UNKNOWN')
+    image_path = event.get('data', {}).get('Image', 'NO_IMAGE')
+    
+    # Chữ ký: (ID của sự kiện Log) + (Thời gian chính xác) + (Đối tượng chính)
+    event_signature = f"{event_id}|{event_time}|{image_path}"
+    try:
+        data = event.get('data', {})
+        image = data.get('Image')
+        if event_signature in rejected_remediations:
+            logger.info(f"Skipping permanently rejected event: {event_signature}")
+            return
+        if event_signature in recent_remediations:
+            logger.debug(f"Skipping cached event: {event_signature}")
+            return
+        
+        # --- LOGIC MỚI: XỬ LÝ TÀI KHOẢN (System Remediation) ---
+        if "New local user account creation detected" in alert:
+            command_line = data.get('CommandLine', '').lower()
+            
+            # Trích xuất tên người dùng
+            user_match = re.search(r'net\s+user\s+([^\s]+)\s+.*?/add', command_line)
+            username_to_delete = user_match.group(1) if user_match else "eviluser"
+            
+            from agent.remediator import queue_user_remediation 
+            
+            # Gửi yêu cầu xóa user
+            path_for_cache = f"USER:{username_to_delete}"
+            req_id = queue_user_remediation(username_to_delete, alert)
+            
+        else:
+            # --- LOGIC CŨ: XỬ LÝ FILE (File Remediation) ---
+            if not image:
+                return
+
+            from agent.remediator import confirm_and_disable_path
+            
+            path_for_cache = image
+            req_id = confirm_and_disable_path(image, alert, event_signature=event_signature)
+
+        logger.info(f"Remediation queued: id={req_id} path={path_for_cache}")
+
+        # 💡 Logic Cache để tránh gửi yêu cầu liên tục
+        recent_remediations.add(event_signature)
+        if len(recent_remediations) > REMEDIATION_CACHE_SIZE:
+            recent_remediations.clear() 
+
+    except Exception as e:
+        logger.error(f"Remediation queuing error: {e}")
+        logger.debug(traceback.format_exc())
+
+def ai_worker():
+    while True:
+        try:
+            event_to_analyze = AI_PROCESSING_QUEUE.get(timeout=0.1)
+            ai_res = analyze_event(event_to_analyze)
+            if ai_res and ai_res.get('score', 0) > 0.8:
+                alert_msg = (
+                    f"AI Anomaly Detected: score={ai_res['score']:.2f} "
+                    f"advice={ai_res.get('advice', 'N/A')}"
+                )
+                process_alert(alert_msg, event_to_analyze)
+            AI_PROCESSING_QUEUE.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            logger.error(f"AI worker error: {e}")
+            logger.debug(traceback.format_exc())
+
+def start_ai_workers():
+    for _ in range(NUM_AI_WORKER):
+        t = threading.Thread(target=ai_worker, daemon=True)
+        t.start()
+        logger.info("Started AI analysis worker thread")
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
@@ -76,7 +168,7 @@ def cleanup_control_file():
     except Exception as e:
         logger.error(f"Failed to remove control file: {e}")
 
-
+AI_WHITELIST_IDS = [1, 3, 5, 8, 10, 11, 13, 17, 18, 22]
 def process_event(event: dict) -> None:
     """Process a single Sysmon event"""
     try:
@@ -100,22 +192,15 @@ def process_event(event: dict) -> None:
         # Run detection rules
         alerts = suspicious_rule(event)
         
-        # Run AI analysis
-        try:
-            ai_result = analyze_event(event)
-            if ai_result and ai_result.get('score', 0) > 0.8:
-                alert_msg = (
-                    f"AI Anomaly Detected: score={ai_result['score']:.2f} "
-                    f"advice={ai_result.get('advice', 'N/A')}"
-                )
-                alerts.append(alert_msg)
-        except Exception as e:
-            logger.error(f"AI analysis failed: {e}")
-
         # Process alerts
         if alerts:
             for alert in alerts:
                 process_alert(alert, event)
+
+        # Queue for AI analysis if applicable
+        if event_id not in AI_WHITELIST_IDS:
+            return  # Skip AI analysis for whitelisted IDs
+        AI_PROCESSING_QUEUE.put(event)       
 
     except Exception as e:
         logger.error(f"Error processing event: {e}")
@@ -150,11 +235,18 @@ def process_alert(alert: str, event: dict) -> None:
             logger.error(f"Failed to write alert log: {e}")
 
         # Attempt remediation for suspicious executables
-        attempt_remediation(event)
+        _execute_remediation_logic(alert, event)
 
     except Exception as e:
         logger.error(f"Error processing alert: {e}")
 
+def register_rejected_event(event_signature: str) -> None:
+    """Adds an event signature to the permanent rejection cache."""
+    global rejected_remediations
+    # Check if we already registered it (shouldn't happen, but safe)
+    if event_signature not in rejected_remediations:
+        rejected_remediations.add(event_signature)
+        logger.warning(f"Event signature permanently suppressed after rejection: {event_signature}")
 
 def attempt_remediation(event: dict) -> None:
     """Queue remediation request if applicable"""
@@ -209,6 +301,10 @@ def run_agent():
         try:
             control_server = ControlServer()
             set_control_server(control_server)  # Make globally accessible
+            
+            # Register the rejection callback
+            control_server.register_rejection_callback(register_rejected_event)
+            
             port = control_server.start()
             control_url = f"http://127.0.0.1:{port}"
             
@@ -227,22 +323,16 @@ def run_agent():
         event_count = 0
         error_count = 0
         
-        for event in sysmon_event_stream():
-            if shutdown_requested:
-                logger.info("Shutdown requested, exiting event loop")
-                break
-            
+        while not shutdown_requested:
             try:
-                process_event(event)
-                event_count += 1
+                for event in sysmon_event_stream_reverse(max_events=200):
+                    if shutdown_requested:
+                        break
+                    process_event(event)
+                    event_count += 1
+                    check_pending_and_execute()
+                # Sleep briefly to avoid tight loop
                 
-                # Periodic status log
-                if event_count % 100 == 0:
-                    logger.info(
-                        f"Processed {event_count} events "
-                        f"({error_count} errors, "
-                        f"{len(recent_remediations)} remediations)"
-                    )
                     
             except Exception as e:
                 error_count += 1
@@ -253,7 +343,14 @@ def run_agent():
                 if error_count > 100:
                     logger.critical("Too many errors, shutting down")
                     break
-
+            if not shutdown_requested:
+                logger.info(f"Finished reverse fetch. Waiting {REVERSE_POLL_INTERVAL}s.")
+                # Sử dụng vòng lặp nhỏ để kiểm tra cờ tắt máy (giúp tắt nhanh)
+                for _ in range(int(REVERSE_POLL_INTERVAL / 0.1)): 
+                    if shutdown_requested:
+                        print("Shutdown requested, exiting wait loop")
+                        break 
+                    time.sleep(0.1)
         logger.info(f"Agent stopped. Processed {event_count} total events")
 
     except KeyboardInterrupt:

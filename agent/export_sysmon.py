@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Dict
 
 try:
-    from agent.collector import sysmon_event_stream
+    from collector import sysmon_event_stream
 except Exception as e:
     sysmon_event_stream = None
 
-from agent.ai.analyzer import _event_to_text
+from ai.analyzer import _event_to_text
 
 
 def flatten_event(ev: Dict) -> Dict:

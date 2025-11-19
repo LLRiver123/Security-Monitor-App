@@ -259,36 +259,46 @@ function startAgent() {
  * Stop Python agent process gracefully
  */
 function stopAgent() {
-	if (!pyProc) {
-		sendLog('No agent process to stop', 'info')
-		return
-	}
+    if (!pyProc) {
+        sendLog('No agent process to stop', 'info')
+        return
+    }
 
-	sendLog('Stopping agent...', 'info')
+    sendLog('Stopping agent...', 'info')
 
-	try {
-		if (process.platform === 'win32') {
-			// Windows: use taskkill for proper process tree termination
-			spawn('taskkill', ['/pid', pyProc.pid, '/f', '/t'])
-		} else {
-			// Unix: send SIGTERM for graceful shutdown
-			pyProc.kill('SIGTERM')
-			
-			// Force kill after timeout
-			setTimeout(() => {
-				if (pyProc) {
-					sendLog('Force killing agent process', 'warn')
-					pyProc.kill('SIGKILL')
-				}
-			}, 5000)
-		}
-	} catch (e) {
-		sendLog(`Error stopping agent: ${e.message}`, 'error')
-	}
+    if (process.platform === 'win32') {
+        // 💡 Bước 1: Gửi tín hiệu dừng (CTRL_C_EVENT) cho tiến trình Python
+        // Điều này cho phép Python chạy hàm signal_handler (SIGINT) và khối finally.
+        
+        try {
+            // Gửi SIGINT (dưới dạng sự kiện Console)
+            // Lưu ý: process.kill('SIGINT') không hoạt động trên Windows
+            // Dùng process.send('stop') nếu Agent có IPC, hoặc taskkill không /f
+            
+            // Thay vì SIGINT, thử SIGTERM (mặc dù không được hỗ trợ tốt):
+            pyProc.kill('SIGTERM'); 
+        } catch (e) {
+             sendLog(`Failed to send SIGTERM: ${e.message}`, 'warn');
+        }
 
-	pyProc = null
-	controlUrl = null
-	controlToken = null
+        // 💡 Bước 2: Chờ 5 giây và buộc dừng (taskkill /f) nếu Agent không tắt
+        setTimeout(() => {
+            if (pyProc) {
+                sendLog('Agent did not exit gracefully, forcing termination via taskkill...', 'warn');
+                // Chỉ sử dụng /f sau khi chờ
+                spawn('taskkill', ['/pid', pyProc.pid, '/f', '/t']); 
+            }
+        }, 5000); 
+
+    } else {
+        // Unix/Linux (Giữ nguyên logic SIGTERM)
+        pyProc.kill('SIGTERM')
+        // ... (Timeout 5000ms cho SIGKILL) ...
+    }
+
+    pyProc = null
+    controlUrl = null
+    controlToken = null
 }
 
 /**

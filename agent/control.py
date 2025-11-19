@@ -20,6 +20,10 @@ class RemediationRequest:
         self.timestamp = datetime.utcnow().isoformat()
         self.status = "pending"  # pending, approved, rejected
         self.response = None
+        # Optional event signature that can be used to correlate UI rejections
+        # back to in-memory agent suppression lists. Accept as an optional
+        # constructor parameter (backwards-compatible).
+        self.event_signature = None
     
     def to_dict(self):
         return {
@@ -27,7 +31,8 @@ class RemediationRequest:
             'path': self.path,
             'reason': self.reason,
             'timestamp': self.timestamp,
-            'status': self.status
+            'status': self.status,
+            'event_signature': self.event_signature
         }
 
 
@@ -46,6 +51,9 @@ class ControlServer:
         self.pending_requests: Dict[str, RemediationRequest] = {}
         self.response_queue = Queue()
         self.lock = threading.Lock()
+
+        # NEW: Callback function set by main.py to handle rejected events permanently
+        self.on_rejection_callback = None
     
     def start(self) -> int:
         """Start the control server in a background thread"""
@@ -101,12 +109,15 @@ class ControlServer:
         finally:
             self.running = False
     
-    def queue_request(self, path: str, reason: str = "") -> str:
+    def queue_request(self, path: str, reason: str = "", event_signature: str = "") -> str:
         """Queue a remediation request and return its ID"""
         req_id = secrets.token_urlsafe(16)
         
         with self.lock:
+            # Pass event_signature into RemediationRequest (constructor is
+            # backwards-compatible); store for later correlation.
             request = RemediationRequest(req_id, path, reason)
+            request.event_signature = event_signature
             self.pending_requests[req_id] = request
             logger.info(f"Queued remediation request: {req_id} for {path}")
         
@@ -138,6 +149,12 @@ class ControlServer:
             logger.error(f"Error waiting for approval: {e}")
             return None
     
+    # NEW METHOD to allow main.py to register the suppression logic
+    def register_rejection_callback(self, callback_func):
+        """Register the function to be called when a request is rejected."""
+        self.on_rejection_callback = callback_func
+        logger.info("Rejection callback registered.")
+
     def _create_handler(self):
         """Create HTTP request handler with access to server instance"""
         server_instance = self
@@ -262,6 +279,14 @@ class ControlServer:
                             return
                         request.status = "rejected"
                         logger.info(f"Request {req_id} rejected")
+
+                        if server_instance.on_rejection_callback and request.event_signature:
+                            try:
+                                # Call the function registered by main.py
+                                server_instance.on_rejection_callback(request.event_signature)
+                                logger.debug(f"Triggered rejection callback for signature: {request.event_signature}")
+                            except Exception as e:
+                                logger.error(f"Error executing rejection callback for {req_id}: {e}")
                     
                     self._send_json({
                         'success': True,

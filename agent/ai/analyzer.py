@@ -18,10 +18,15 @@ from __future__ import annotations
 
 import json
 import os
+import joblib
+import numpy as np
 from typing import Dict, Any, List
 
 BASE_DIR = os.path.dirname(__file__)
 CENTROID_PATH = os.path.join(BASE_DIR, 'benign_centroid.npy')
+data = joblib.load('agent/ai/lof_model.joblib')
+pipeline = data['pipeline']
+features = data['features']
 
 # Lazy imports
 _model = None
@@ -67,6 +72,26 @@ def _event_to_text(event: Dict[str, Any]) -> str:
             parts.append(f"{k}:{data.get(k)}")
     return '\n'.join(parts)
 
+def event_to_feature_vector(event_dict):
+    # Same feature extraction logic as extract_features.py but applied to single event
+    v = []
+    v.append(len(event_dict.get('CommandLine') or ''))
+    v.append(1 if 'powershell' in (event_dict.get('CommandLine') or '').lower() else 0)
+    v.append(1 if '\\temp\\' in (event_dict.get('Image') or '').lower() else 0)
+    v.append(1 if event_dict.get('DestinationIp') else 0)
+    # parent_bucket example (must match same bucketing code)
+    import hashlib
+    p = event_dict.get('ParentImage') or ''
+    h = int(hashlib.md5(p.encode('utf-8')).hexdigest()[:8], 16) % 64
+    v.append(float(h))
+    # hour (if time available)
+    # ... append hour ...
+    X = np.array(v, dtype=float).reshape(1,-1)
+    Xs = pipeline.named_steps['scaler'].transform(X)
+    score = pipeline.named_steps['lof'].decision_function(Xs)[0]
+    # convert to 0..100 as earlier
+    suspicious = int(max(0, min(100, int(( -score) * 20 + 50))))
+    return suspicious
 
 def compute_embedding(text: str):
     """Return a normalized embedding vector (numpy) or None if model missing."""
@@ -163,8 +188,9 @@ def analyze_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     emb_score = embedding_score_for_event(event)
     heur = heuristic_score(event)
+    lof_score = event_to_feature_vector(event)
     # combine: weight embedding more
-    combined = 0.7 * emb_score + 0.3 * heur
+    combined = 0.6 * emb_score + 0.2 * heur + 0.2 * (lof_score / 100)
     # map to 0-100
     final = int(max(0, min(100, round(combined * 100))))
 
