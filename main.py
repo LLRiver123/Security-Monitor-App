@@ -27,12 +27,13 @@ LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / 'agent.log'
 AI_PROCESSING_QUEUE = queue.Queue()
 NUM_AI_WORKER = 2
-REVERSE_POLL_INTERVAL = 5
+REVERSE_POLL_INTERVAL = 10
 control_server = None
 shutdown_requested = False
 recent_remediations: Set[str] = set()
 REMEDIATION_CACHE_SIZE = 1000
 rejected_remediations: Set[str] = set()
+AI_ALERT_THRESHOLD = 75  # percent threshold (0-100) for AI-generated alerts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -57,51 +58,65 @@ def _execute_remediation_logic(alert: str, event: dict) -> None:
     """
     global recent_remediations, REMEDIATION_CACHE_SIZE, rejected_remediations
     event_id = event.get('event_id', 'UNKNOWN')
-    event_time = event.get('time', 'UNKNOWN')
-    image_path = event.get('data', {}).get('Image', 'NO_IMAGE')
+    data = event.get('data', {})
+    image_path = data.get('Image', 'NO_IMAGE')
     
-    # Chữ ký: (ID của sự kiện Log) + (Thời gian chính xác) + (Đối tượng chính)
-    event_signature = f"{event_id}|{event_time}|{image_path}"
+    # Chữ ký: Prefix FILE: để thống nhất logic
+    event_signature = f"FILE:{image_path}"
+    
     try:
-        data = event.get('data', {})
-        image = data.get('Image')
+        # Check Permanent Rejection
         if event_signature in rejected_remediations:
             logger.info(f"Skipping permanently rejected event: {event_signature}")
             return
+        # Check Recent Cache
         if event_signature in recent_remediations:
             logger.debug(f"Skipping cached event: {event_signature}")
             return
         
-        # --- LOGIC MỚI: XỬ LÝ TÀI KHOẢN (System Remediation) ---
+        req_id = None
+        path_for_cache = image_path
+
+        # --- CASE 1: USER REMEDIATION ---
         if "New local user account creation detected" in alert:
             command_line = data.get('CommandLine', '').lower()
-            
-            # Trích xuất tên người dùng
             user_match = re.search(r'net\s+user\s+([^\s]+)\s+.*?/add', command_line)
             username_to_delete = user_match.group(1) if user_match else "eviluser"
             
-            from agent.remediator import queue_user_remediation 
+            from agent.remediator import queue_user_remediation
             
-            # Gửi yêu cầu xóa user
+            # Override cache path for Users
             path_for_cache = f"USER:{username_to_delete}"
-            req_id = queue_user_remediation(username_to_delete, alert)
+            req_id = queue_user_remediation(username_to_delete, alert, event_signature)
             
-        else:
-            # --- LOGIC CŨ: XỬ LÝ FILE (File Remediation) ---
-            if not image:
+        # --- CASE 2: MIMIKATZ / MALWARE (Fix Applied Here) ---
+        elif "Mimikatz execution detected" in alert or "Known malicious binary" in alert:
+            if not image_path:
                 return
-
+            
+            # 💡 FIX: Do NOT use queue_process_termination. 
+            # Use confirm_and_disable_path so it triggers terminate_process_by_path inside remediator.
             from agent.remediator import confirm_and_disable_path
             
-            path_for_cache = image
-            req_id = confirm_and_disable_path(image, alert, event_signature=event_signature)
+            path_for_cache = image_path
+            req_id = confirm_and_disable_path(image_path, alert, event_signature=event_signature)
+            
+        # --- CASE 3: GENERIC SUSPICIOUS FILE ---
+        elif "Suspicious" in alert or "CRITICAL" in alert:
+             if not image_path:
+                return
+             
+             from agent.remediator import confirm_and_disable_path
+             
+             path_for_cache = image_path
+             req_id = confirm_and_disable_path(image_path, alert, event_signature=event_signature)
 
-        logger.info(f"Remediation queued: id={req_id} path={path_for_cache}")
-
-        # 💡 Logic Cache để tránh gửi yêu cầu liên tục
-        recent_remediations.add(event_signature)
-        if len(recent_remediations) > REMEDIATION_CACHE_SIZE:
-            recent_remediations.clear() 
+        # --- LOGGING & CACHING ---
+        if req_id:
+            logger.info(f"Remediation queued: id={req_id} path={path_for_cache}")
+            recent_remediations.add(event_signature)
+            if len(recent_remediations) > REMEDIATION_CACHE_SIZE:
+                recent_remediations.clear() 
 
     except Exception as e:
         logger.error(f"Remediation queuing error: {e}")
@@ -111,14 +126,34 @@ def ai_worker():
     while True:
         try:
             event_to_analyze = AI_PROCESSING_QUEUE.get(timeout=0.1)
+            
+            # 1. In ra xem event nào đang được gửi đi
+            event_id = event_to_analyze.get('event_id')
+            # logger.info(f"[AI DEBUG] Analyzing Event ID: {event_id}") 
+
             ai_res = analyze_event(event_to_analyze)
-            if ai_res and ai_res.get('score', 0) > 0.8:
-                alert_msg = (
-                    f"AI Anomaly Detected: score={ai_res['score']:.2f} "
-                    f"advice={ai_res.get('advice', 'N/A')}"
-                )
-                process_alert(alert_msg, event_to_analyze)
+            
+            # 2. Handle AI result: `analyze_event` returns score in 0..100
+            if ai_res:
+                score = ai_res.get('score', 0)
+                # Debug-level output only (avoid spamming INFO logs)
+                logger.debug(f"[AI DEBUG] Event {event_id} | Score: {score} | Reason: {ai_res.get('reason', 'N/A')}")
+
+                # Only generate an alert when score meets configured percent threshold
+                if score >= AI_ALERT_THRESHOLD:
+                    alert_msg = (
+                        f"AI Anomaly Detected: score={score:.2f} "
+                        f"advice={ai_res.get('advice', 'N/A')}"
+                    )
+                    process_alert(alert_msg, event_to_analyze)
+                else:
+                    # keep quiet for low scores (debug only)
+                    pass
+            else:
+                logger.debug(f"[AI DEBUG] Event {event_id} returned NO result from AI engine.")
+
             AI_PROCESSING_QUEUE.task_done()
+            
         except queue.Empty:
             continue
         except Exception as e:
@@ -168,7 +203,7 @@ def cleanup_control_file():
     except Exception as e:
         logger.error(f"Failed to remove control file: {e}")
 
-AI_WHITELIST_IDS = [1, 3, 5, 8, 10, 11, 13, 17, 18, 22]
+AI_WHITELIST_IDS = [13, 17, 18]
 def process_event(event: dict) -> None:
     """Process a single Sysmon event"""
     try:
@@ -212,12 +247,14 @@ def process_alert(alert: str, event: dict) -> None:
     try:
         event_id = event.get('event_id', 'unknown')
         event_time = event.get('time', 'unknown')
+        pid = event.get('data', {}).get('ProcessId', 'N/A')
         
         # Format alert message
         alert_msg = (
             f"[ALERT] {alert} | "
             f"EventID={event_id} | "
-            f"Time={event_time}"
+            f"Time={event_time} | "
+            f"PID={pid}"
         )
         
         # Notify through all channels
@@ -311,6 +348,7 @@ def run_agent():
             logger.info(f"Control API listening on {control_url}")
             notify_console(f"Control API listening on {control_url}")
             
+            start_ai_workers()
             # Write control file for Electron
             token = getattr(control_server, 'token', None)
             write_control_file(control_url, token)
@@ -325,7 +363,7 @@ def run_agent():
         
         while not shutdown_requested:
             try:
-                for event in sysmon_event_stream_reverse(max_events=200):
+                for event in sysmon_event_stream_reverse(max_events=500):
                     if shutdown_requested:
                         break
                     process_event(event)

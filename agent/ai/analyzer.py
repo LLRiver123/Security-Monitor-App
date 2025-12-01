@@ -84,9 +84,25 @@ def event_to_feature_vector(event_dict):
     p = event_dict.get('ParentImage') or ''
     h = int(hashlib.md5(p.encode('utf-8')).hexdigest()[:8], 16) % 64
     v.append(float(h))
-    # hour (if time available)
-    # ... append hour ...
-    X = np.array(v, dtype=float).reshape(1,-1)
+    # hour (if time available) — previously this appended a 6th feature.
+    # Ensure the vector length matches what the trained `StandardScaler` expects
+    # (some models expect 6 features). Pad with zeros or truncate as needed.
+    try:
+        scaler = pipeline.named_steps.get('scaler')
+        expected_n = getattr(scaler, 'n_features_in_', None)
+    except Exception:
+        scaler = None
+        expected_n = None
+
+    # If we know expected_n, pad/truncate v to match. Otherwise leave as-is.
+    if expected_n is not None:
+        # pad with zeros
+        while len(v) < expected_n:
+            v.append(0.0)
+        if len(v) > expected_n:
+            v = v[:expected_n]
+
+    X = np.array(v, dtype=float).reshape(1, -1)
     Xs = pipeline.named_steps['scaler'].transform(X)
     score = pipeline.named_steps['lof'].decision_function(Xs)[0]
     # convert to 0..100 as earlier
@@ -99,7 +115,12 @@ def compute_embedding(text: str):
     if model is None:
         return None
     np = _load_numpy()
-    emb = model.encode(text, normalize_embeddings=True)
+    # Disable progress bar for single-item encodes
+    try:
+        emb = model.encode(text, normalize_embeddings=True, show_progress_bar=False)
+    except TypeError:
+        # Older SentenceTransformer versions may not support show_progress_bar
+        emb = model.encode(text, normalize_embeddings=True)
     return np.array(emb, dtype=float)
 
 
@@ -143,7 +164,10 @@ def embedding_score_for_event(event: Dict[str, Any]) -> float:
         # build weak centroid from defaults
         model = _load_model()
         texts = default_benign_texts()
-        vecs = model.encode(texts, normalize_embeddings=True)
+        try:
+            vecs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+        except TypeError:
+            vecs = model.encode(texts, normalize_embeddings=True)
         centroid = np.mean(vecs, axis=0)
     # cosine similarity (emb normalized)
     # if centroid not normalized, normalize it
@@ -196,11 +220,11 @@ def analyze_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     advice = ''
     if final >= 75:
-        advice = 'High suspicion — investigate and consider quarantining the file.'
+        advice = 'High suspicion - investigate and consider quarantining the file.'
     elif final >= 40:
-        advice = 'Moderate suspicion — review process and command-line carefully.'
+        advice = 'Moderate suspicion - review process and command-line carefully.'
     else:
-        advice = 'Low suspicion — monitor for further activity.'
+        advice = 'Low suspicion - monitor for further activity.'
 
     return {'score': final, 'advice': advice, 'meta': {'emb_score': emb_score, 'heuristic': heur}}
 
@@ -216,7 +240,10 @@ def train_baseline(input_csv: str, out_npy: str = CENTROID_PATH):
     if 'text' not in df.columns:
         raise RuntimeError("input CSV must have a 'text' column containing event summaries")
     texts = df['text'].fillna('').astype(str).tolist()
-    vecs = model.encode(texts, normalize_embeddings=True)
+    try:
+        vecs = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
+    except TypeError:
+        vecs = model.encode(texts, normalize_embeddings=True)
     np = _load_numpy()
     centroid = np.mean(vecs, axis=0)
     save_centroid(centroid, out_npy)

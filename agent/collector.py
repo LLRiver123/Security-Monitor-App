@@ -5,6 +5,13 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 import logging
 
+BOOKMARK_FILE = "sysmon_bookmark.xml"
+SYSMON_CHANNEL = "Microsoft-Windows-Sysmon/Operational"
+EVENT_LOG_QUERY = "*"
+
+# 💡 GLOBAL CACHE ĐỂ TRÁNH DUPLICATE TRONG REVERSE POLLING
+# Chỉ dùng cho phiên chạy hiện tại (runtime)
+PROCESSED_RECORD_IDS = set()
 logger = logging.getLogger('agent.collector')
 
 # collector.py (Phiên bản Reverse Polling an toàn)
@@ -82,14 +89,12 @@ def sysmon_event_stream():
         logger.error(f"Error during event stream: {e}")
         yield {"error": f"Stream error: {e}"}
 
+
+
 def _parse_event_xml(xml_string):
     """
     Parse Sysmon event XML into normalized dictionary format.
-    
-    Returns:
-        dict: Normalized event with keys: event_id, time, source, computer, xml, data
     """
-    # Namespace cần thiết để phân tích các thẻ Windows Event Log
     ns = {"ev": "http://schemas.microsoft.com/win/2004/08/events/event"}
     
     try:
@@ -105,6 +110,10 @@ def _parse_event_xml(xml_string):
         comp_node = root.find("./ev:System/ev:Computer", ns)
         source_node = system.find("./ev:Provider", ns)
         
+        # 💡 NEW: Lấy RecordID để khử trùng lặp
+        rid_node = system.find("./ev:EventRecordID", ns)
+        record_id = int(rid_node.text) if rid_node is not None else 0
+        
         # Parse Event ID và Timestamp
         event_id = int(eid_node.text) if eid_node is not None and eid_node.text else None
         ts = ts_node.attrib.get("SystemTime") if ts_node is not None else None
@@ -112,10 +121,7 @@ def _parse_event_xml(xml_string):
         time_iso = None
         if ts:
             try:
-                # Chuẩn hóa thời gian về ISO 8601
-                time_iso = datetime.fromisoformat(
-                    ts.replace("Z", "+00:00")
-                ).isoformat()
+                time_iso = datetime.fromisoformat(ts.replace("Z", "+00:00")).isoformat()
             except Exception:
                 time_iso = ts
 
@@ -128,9 +134,9 @@ def _parse_event_xml(xml_string):
                 if name:
                     data[name] = data_node.text if data_node.text else ""
 
-        # 3. Trả về Dictionary Chuẩn hóa
         return {
             "event_id": event_id,
+            "record_id": record_id, # 💡 Trả về Record ID
             "time": time_iso,
             "source": source_node.attrib.get("Name") if source_node is not None else None,
             "computer": comp_node.text if comp_node is not None else None,
@@ -145,20 +151,19 @@ def _parse_event_xml(xml_string):
 
 def sysmon_event_stream_reverse(max_events=1000):
     """
-    Retrieves the latest N events using reverse query, then stops.
-    Used for UI display/refresh only.
+    Retrieves the latest N events using reverse query.
+    INCLUDES DEDUPLICATION LOGIC.
     """
+    global PROCESSED_RECORD_IDS
     handle = None
     
     try:
-        # 💡 Dùng EvtQueryReverseDirection để đọc từ MỚI nhất về CŨ nhất
         handle = win32evtlog.EvtQuery(
             SYSMON_CHANNEL,
             win32evtlog.EvtQueryReverseDirection, 
             EVENT_LOG_QUERY,
             None
         )
-        logger.info(f"Reverse EvtQuery started to fetch last {max_events} events.")
     except Exception as e:
         logger.error(f"Failed to execute Reverse EvtQuery: {e}")
         yield {"error": f"EvtQuery failed: {e}"}
@@ -167,37 +172,50 @@ def sysmon_event_stream_reverse(max_events=1000):
     fetched_count = 0
     
     try:
+        # Lấy batch sự kiện
         while fetched_count < max_events:
-            # Lấy các sự kiện tiếp theo
             events = win32evtlog.EvtNext(handle, min(100, max_events - fetched_count), 1000)
             
             if not events:
-                break # Đã đọc hết log
+                break 
                 
             for ev in events:
-                # 💡 Xử lý sự kiện và Yield
                 xml = win32evtlog.EvtRender(ev, win32evtlog.EvtRenderEventXml)
                 parsed_event = _parse_event_xml(xml)
                 
                 if "error" not in parsed_event:
+                    # 💡 LOGIC KHỬ TRÙNG LẶP QUAN TRỌNG
+                    rid = parsed_event.get("record_id")
+                    
+                    # Nếu ID này đã xử lý rồi -> Bỏ qua
+                    if rid in PROCESSED_RECORD_IDS:
+                        continue
+                    
+                    # Nếu chưa -> Thêm vào cache và Yield
+                    PROCESSED_RECORD_IDS.add(rid)
+                    
+                    # Cơ chế dọn dẹp cache đơn giản để tránh tốn RAM (giữ 5000 item mới nhất)
+                    if len(PROCESSED_RECORD_IDS) > 5000:
+                        # Xóa bớt (set không order nên clear hết cho an toàn trong demo, hoặc dùng logic phức tạp hơn)
+                        # Ở demo, clear hết có thể gây duplicate lại 1 lần, nhưng chấp nhận được.
+                        # Tốt nhất là không clear trong phiên demo ngắn.
+                        pass 
+
                     yield parsed_event
                 
                 fetched_count += 1
                 if fetched_count >= max_events:
                     break
             
-            # Giữ thời gian nghỉ ngắn giữa các batch lớn
-            time.sleep(0.5) 
+            time.sleep(0.1)
             
     except Exception as e:
         logger.error(f"Error during reverse stream: {e}")
         yield {"error": f"Stream error: {e}"}
         
     finally:
-        # 💡 BẮT BUỘC: Đóng Handle Query
         try:
             if handle:
                 win32api.CloseHandle(handle)
-                logger.info("Closed reverse query handle.")
         except Exception as e:
-            logger.error(f"Error closing reverse query handle: {e}")
+            logger.error(f"Error closing handle: {e}")

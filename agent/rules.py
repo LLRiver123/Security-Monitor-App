@@ -103,5 +103,7 @@ def suspicious_rule(event):
             else:
                  alerts.append(f"Suspicious: External network connection to {dst}:{dst_port}.")
 
+    if event.get("event_id") == 29 and "mimikatz.exe" in image:
+        alerts.append("CRITICAL: Mimikatz execution detected (T1003).")
 
     return alerts

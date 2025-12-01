@@ -1,9 +1,11 @@
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+import psutil
 import json # Đã thêm import
 import stat # Đã thêm import cho chmod
 import re
@@ -22,7 +24,6 @@ def set_rejected_event_callback(cb):
     """
     global _rejected_event_callback
     _rejected_event_callback = cb
-
 
 def register_rejected_event_callback(signature: str):
     """Invoke the registered rejection callback (if any).
@@ -69,39 +70,132 @@ def confirm_and_disable_path(path: str, reason: str = "Suspicious activity detec
     
     return req_id
 
-
-def execute_remediation(path: str, action: str = "disable") -> bool:
-    """
-    Execute the actual remediation action on a file path.
-    This should only be called after user approval.
-    
-    Args:
-        path: File path to remediate
-        action: Type of action ('disable', 'quarantine', 'delete')
-    
-    Returns:
-        True if successful, False otherwise
-    """
+def terminate_process(pid: int) -> bool:
+    """Kill a process by its PID."""
     try:
-        path_obj = Path(path)
+        # Check if process exists
+        if not psutil.pid_exists(pid):
+            logger.warning(f"PID {pid} does not exist (already dead?).")
+            return True
+
+        process = psutil.Process(pid)
+        process_name = process.name()
         
-        if not path_obj.exists():
-            logger.warning(f"Path does not exist: {path}")
-            return False
+        logger.info(f"Attempting to terminate process: {process_name} (PID: {pid})")
+        process.kill()  # Force kill
         
-        if action == "disable":
-            return disable_file(path_obj)
-        elif action == "quarantine":
-            return quarantine_file(path_obj)
-        elif action == "delete":
-            return delete_file(path_obj)
-        else:
-            logger.error(f"Unknown remediation action: {action}")
+        # Wait up to 3 seconds for it to die
+        try:
+            process.wait(timeout=3)
+            logger.info(f"Process {pid} killed successfully.")
+            return True
+        except psutil.TimeoutExpired:
+            logger.error(f"Failed to kill process {pid} within timeout.")
             return False
+
+    except psutil.AccessDenied:
+        logger.error(f"Access denied when trying to kill PID {pid}. Agent needs Admin rights.")
+        return False
+    except Exception as e:
+        logger.error(f"Error terminating PID {pid}: {e}")
+        return False
+
+def terminate_process_by_path(file_path: Path) -> bool:
+    """
+    Finds and kills any process running from the specific file path.
+    Includes a 'Nuclear Option' (taskkill) to ensure visual cleanup for demos.
+    """
+    killed_something = False
+    target_name = file_path.name  # e.g., "ransomware.exe"
+    
+    try:
+        # Method 1: Surgical Kill (via psutil)
+        # Normalize path for comparison
+        target_path = str(file_path.resolve()).lower()
+        
+        for proc in psutil.process_iter(['pid', 'name', 'exe']):
+            try:
+                if proc.info['exe'] and proc.info['exe'].lower() == target_path:
+                    logger.warning(f"Found active process {proc.info['name']} (PID: {proc.info['pid']}). Killing...")
+                    proc.kill()
+                    killed_something = True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        # Method 2: The "Nuclear Option" (Taskkill by Name)
+        # This guarantees the window closes even if PIDs don't match or if there are child processes.
+        # We only run this if the file exists to avoid collateral damage.
+        if file_path.exists():
+            logger.info(f"Executing forcing cleanup: taskkill /F /IM {target_name}")
+            # stdout=subprocess.DEVNULL hides the command output from your logs to keep them clean
+            subprocess.run(
+                ["taskkill", "/F", "/IM", target_name], 
+                stdout=subprocess.DEVNULL, 
+                stderr=subprocess.DEVNULL
+            )
+            killed_something = True
+
+        if killed_something:
+            time.sleep(1.5) # Wait for Windows to clean up handles
+            return True
             
     except Exception as e:
-        logger.error(f"Remediation execution failed for {path}: {e}")
+        logger.error(f"Error cleaning up processes for {file_path}: {e}")
+    
+    return False
+
+def execute_remediation(path: str, action: str = "quarantine") -> bool:
+    """
+    Execute the actual remediation action with Retry Logic and Process Killing.
+    """
+    # 1. Handle System Objects (User)
+    if path.startswith("USER:"):
+        username = path.replace("USER:", "")
+        from agent.remediator import delete_user 
+        return delete_user(username)
+
+    # 2. Handle Process Objects (NEW FIX) 💡
+    if path.startswith("pid_"):
+        try:
+            pid_str = path.replace("pid_", "")
+            pid = int(pid_str)
+            return terminate_process(pid)
+        except ValueError:
+            logger.error(f"Invalid PID format in remediation path: {path}")
+            return False
+
+    # 3. Handle File Objects (Existing Logic)
+    path_obj = Path(path)
+    if not path_obj.exists():
+        logger.warning(f"Path does not exist: {path}")
         return False
+
+    # STEP A: Kill the process holding the file (File Locking logic)
+    terminate_process_by_path(path_obj)
+
+    # STEP B: Attempt Remediation with Retry Logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if action == "disable":
+                return disable_file(path_obj)
+            elif action == "quarantine":
+                return quarantine_file(path_obj)
+            elif action == "delete":
+                return delete_file(path_obj)
+            else:
+                logger.error(f"Unknown action: {action}")
+                return False
+        except PermissionError:
+            logger.warning(f"File locked. Retrying remediation ({attempt + 1}/{max_retries})...")
+            terminate_process_by_path(path_obj)
+            time.sleep(1)
+        except Exception as e:
+            logger.error(f"Remediation error on attempt {attempt}: {e}")
+            return False
+            
+    logger.error(f"Failed to remediate {path} after {max_retries} attempts.")
+    return False
 
 
 def disable_file(path: Path) -> bool:
@@ -115,18 +209,19 @@ def disable_file(path: Path) -> bool:
             path.rename(disabled_path)
             logger.info(f"File disabled: {path} -> {disabled_path}")
             return True
-        # else:  # Unix-like
-        #     current_mode = path.stat().st_mode
-        #     new_mode = current_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH
-        #     path.chmod(new_mode)        
-        #     logger.info(f"Execute permissions removed: {path}")
-        #     return True                 
+        else:
+            # Unix-like: remove execute bits
+            current_mode = path.stat().st_mode
+            new_mode = current_mode & ~stat.S_IXUSR & ~stat.S_IXGRP & ~stat.S_IXOTH
+            path.chmod(new_mode)
+            logger.info(f"Execute permissions removed: {path}")
+            return True
     except Exception as e:
         logger.error(f"Failed to disable file {path}: {e}")
         return False
 
 def quarantine_file(path: Path) -> bool:
-    """Move file to quarantine directory."""
+    """Move file to quarantine directory and record metadata."""
     try:
         quarantine_dir = Path.home() / '.agent_quarantine'
         quarantine_dir.mkdir(exist_ok=True, mode=0o700)
@@ -135,7 +230,7 @@ def quarantine_file(path: Path) -> bool:
         quarantine_path = quarantine_dir / quarantine_name
         path.rename(quarantine_path)
         logger.info(f"File quarantined: {path} -> {quarantine_path}")
-        
+
         metadata_path = quarantine_path.with_suffix('.metadata.json')
         metadata = {
             'original_path': str(path),
@@ -201,84 +296,58 @@ def queue_user_remediation(username: str, reason: str = "Account Persistence det
     logger.info(f"Remediation request queued: {req_id} for user={username}")
     return req_id
 
-
-def execute_remediation(path: str, action: str = "disable") -> bool:
+def queue_process_termination(pid: int, reason: str = "Malicious Process detected", event_signature: str = "") -> str:
     """
-    Execute the actual remediation action. Dựa vào prefix để phân loại.
+    Queue a request to terminate a process by PID. 
+    Prefixes the path with 'pid_' to distinguish it from file paths.
     """
-    if path.startswith("USER:"):
-        # 💡 XỬ LÝ XÓA TÀI KHOẢN
-        username = path.replace("USER:", "")
-        logger.warning(f"Executing system remediation: Deleting user {username}")
-        return delete_user(username)
-        
-    else:
-        # XỬ LÝ FILE (Giữ nguyên logic cũ)
-        try:
-            path_obj = Path(path)
-            
-            if not path_obj.exists():
-                logger.warning(f"Path does not exist: {path}")
-                return False
-            
-            if action == "disable":
-                return disable_file(path_obj)
-            elif action == "quarantine":
-                return quarantine_file(path_obj)
-            elif action == "delete":
-                return delete_file(path_obj)
-            else:
-                logger.error(f"Unknown remediation action: {action}")
-                return False
-        except Exception as e:
-            logger.error(f"Remediation execution failed for file {path}: {e}")
-            return False
-
+    control_server = get_control_server()
+    if not control_server:
+        raise RuntimeError("Control server not available")
+    
+    # 💡 Đóng gói request thành format PROCESS OBJECT
+    process_path = f"pid_{pid}" 
+    req_id = control_server.queue_request(process_path, reason, event_signature=event_signature)
+    logger.info(f"Remediation request queued: {req_id} for pid={pid}")
+    return req_id
 
 def check_pending_and_execute():
+    """
+    Checks pending requests and executes them.
+    """
     control_server = get_control_server()
     if not control_server:
         return
     
     requests_to_remove = []
-
+    
     with control_server.lock:
         for req_id, request in list(control_server.pending_requests.items()):
+            
             if request.status == "approved":
                 logger.info(f"Executing approved remediation: {req_id} ({request.path})")
                 
-                # 💡 PHÂN LOẠI ĐỐI TƯỢNG VÀ THỰC THI CHỈ MỘT LẦN
+                # Call our robust execute function
+                # We force 'quarantine' for files as it's the safest demo action
+                success = execute_remediation(request.path, action="quarantine")
                 
-                # 1. Trường hợp System Object (User)
-                if request.path.startswith("USER:"):
-                    username = request.path.replace("USER:", "")
-                    logger.warning(f"Executing user deletion for: {username}")
-                    success = delete_user(username) # 🛑 GỌI THẲNG HÀM XỬ LÝ USER
-                    
-                # 2. Trường hợp File Object
-                else:
-                    # Giao cho execute_remediation xử lý File Remediation
-                    # Giả định action là "quarantine" để demo rõ hơn
-                    success = execute_remediation(request.path, action="quarantine") 
-                
-                # Cập nhật trạng thái
                 if success:
                     request.status = "completed"
                     logger.info(f"Remediation completed: {req_id}")
-                    requests_to_remove.append(req_id)
                 else:
                     request.status = "failed"
                     logger.error(f"Remediation failed: {req_id}")
-                    requests_to_remove.append(req_id)
-            
+                
+                requests_to_remove.append(req_id)
+
             elif request.status == "rejected":
                 logger.info(f"Remediation rejected by user: {req_id}")
                 requests_to_remove.append(req_id)
-            # Giữ nguyên logic dọn dẹp (nếu có)
+
+        # Cleanup
         for req_id in requests_to_remove:
             if req_id in control_server.pending_requests:
                 del control_server.pending_requests[req_id]
-                logger.debug(f"Removed processed request {req_id} from pending queue.")
 
 def restore_from_quarantine(quarantine_path: str) -> bool:
     """Restore a quarantined file to its original location."""

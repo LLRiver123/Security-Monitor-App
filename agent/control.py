@@ -20,6 +20,7 @@ class RemediationRequest:
         self.timestamp = datetime.utcnow().isoformat()
         self.status = "pending"  # pending, approved, rejected
         self.response = None
+        self.pid = None
         # Optional event signature that can be used to correlate UI rejections
         # back to in-memory agent suppression lists. Accept as an optional
         # constructor parameter (backwards-compatible).
@@ -32,7 +33,8 @@ class RemediationRequest:
             'reason': self.reason,
             'timestamp': self.timestamp,
             'status': self.status,
-            'event_signature': self.event_signature
+            'event_signature': self.event_signature,
+            'pid': self.pid
         }
 
 
