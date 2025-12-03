@@ -36,6 +36,13 @@ contextBridge.exposeInMainWorld('agentAPI', {
 		ipcRenderer.on('agent-exit', subscription)
 		return () => ipcRenderer.removeListener('agent-exit', subscription)
 	}
+	,
+
+	onUserNotification: (callback) => {
+		const subscription = (event, data) => callback(data)
+		ipcRenderer.on('agent-user', subscription)
+		return () => ipcRenderer.removeListener('agent-user', subscription)
+	}
 })
 
 // Log that preload script loaded successfully

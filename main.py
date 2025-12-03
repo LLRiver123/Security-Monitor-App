@@ -34,16 +34,52 @@ recent_remediations: Set[str] = set()
 REMEDIATION_CACHE_SIZE = 1000
 rejected_remediations: Set[str] = set()
 AI_ALERT_THRESHOLD = 75  # percent threshold (0-100) for AI-generated alerts
+# Controls to reduce AI summary noise
+# Only emit INFO-level AI summaries when score >= AI_SUMMARY_MIN_SCORE
+AI_SUMMARY_MIN_SCORE = int(os.getenv('AGENT_AI_SUMMARY_MIN_SCORE', '50'))
+# Prevent repeated identical summaries for the same event within this window (seconds)
+AI_SUMMARY_DEDUP_SECONDS = int(os.getenv('AGENT_AI_SUMMARY_DEDUP_SECONDS', '5'))
+# small in-memory cache of last summary timestamps keyed by event_signature
+_ai_summary_last: dict = {}
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Configure logging with optional JSON structured format and avoid duplicate handlers
+LOG_FORMAT = os.getenv('AGENT_LOG_FORMAT', 'text').lower()
+root_logger = logging.getLogger()
+for h in list(root_logger.handlers):
+    root_logger.removeHandler(h)
 
+# File and stream handlers
+file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+stream_handler = logging.StreamHandler(sys.stdout)
+
+if LOG_FORMAT == 'json':
+    class JsonFormatter(logging.Formatter):
+        def format(self, record):
+            # Build a compact JSON object for ingestion
+            msg = record.getMessage()
+            payload = {
+                'timestamp': self.formatTime(record, '%Y-%m-%dT%H:%M:%S%z'),
+                'level': record.levelname,
+                'logger': record.name,
+                'message': msg
+            }
+            if record.exc_info:
+                payload['exc'] = self.formatException(record.exc_info)
+            return json.dumps(payload, ensure_ascii=False)
+
+    jfmt = JsonFormatter()
+    file_handler.setFormatter(jfmt)
+    stream_handler.setFormatter(jfmt)
+else:
+    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    file_handler.setFormatter(fmt)
+    stream_handler.setFormatter(fmt)
+
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(file_handler)
+root_logger.addHandler(stream_handler)
+
+# Main agent logger
 logger = logging.getLogger('agent')
 
 # Global state
@@ -136,8 +172,39 @@ def ai_worker():
             # 2. Handle AI result: `analyze_event` returns score in 0..100
             if ai_res:
                 score = ai_res.get('score', 0)
+                # Record metrics: total AI-evaluated and score histogram
+                try:
+                    with METRICS_LOCK:
+                        METRICS['ai_evaluated'] += 1
+                        # bucket 0..9, 10..19 -> index 0..9
+                        b = min(9, max(0, int(score) // 10))
+                        METRICS['ai_score_histogram'][b] += 1
+                except Exception:
+                    # Metrics should never interrupt processing
+                    logger.debug('Failed to record AI metrics')
                 # Debug-level output only (avoid spamming INFO logs)
                 logger.debug(f"[AI DEBUG] Event {event_id} | Score: {score} | Reason: {ai_res.get('reason', 'N/A')}")
+
+                # Emit a concise INFO-level AI summary only if score is high enough
+                # and avoid repeating the same summary for the same event too often.
+                try:
+                    data = event_to_analyze.get('data') or {}
+                    image = (data.get('Image', '') or '')
+                    # Use a compact signature (event id + image) so minor timestamp
+                    # differences don't defeat deduplication for repeated events.
+                    sig = f"{event_id}|{image}"
+                    last_ts = _ai_summary_last.get(sig)
+                    now_ts = time.time()
+                    # Log if score >= configured per-summary threshold OR score >= alert threshold
+                    should_log = score >= AI_SUMMARY_MIN_SCORE or score >= AI_ALERT_THRESHOLD
+                    if should_log:
+                        if (last_ts is None) or ((now_ts - last_ts) >= AI_SUMMARY_DEDUP_SECONDS):
+                            logger.info(f"[AI SUMMARY] Event {event_id} | Score: {score}")
+                            _ai_summary_last[sig] = now_ts
+                        else:
+                            logger.debug(f"Suppressed duplicate AI summary for {sig}")
+                except Exception:
+                    logger.debug('AI summary logging error')
 
                 # Only generate an alert when score meets configured percent threshold
                 if score >= AI_ALERT_THRESHOLD:
@@ -161,6 +228,15 @@ def ai_worker():
             logger.debug(traceback.format_exc())
 
 def start_ai_workers():
+    # Pre-warm the AI models once to avoid repeated loading from multiple
+    # threads (this prevents repeated SentenceTransformer INFO messages).
+    try:
+        import agent.ai.analyzer as _analyzer
+        _analyzer._load_model()
+        logger.info("Preloaded AI model for analysis")
+    except Exception:
+        logger.debug("AI model pre-warm failed or model unavailable")
+
     for _ in range(NUM_AI_WORKER):
         t = threading.Thread(target=ai_worker, daemon=True)
         t.start()
@@ -204,6 +280,23 @@ def cleanup_control_file():
         logger.error(f"Failed to remove control file: {e}")
 
 AI_WHITELIST_IDS = [13, 17, 18]
+# --- Simple runtime metrics ---
+METRICS_LOCK = threading.Lock()
+METRICS = {
+    'events_processed': 0,
+    'ai_evaluated': 0,
+    # histogram 0-9,10-19,..90-100
+    'ai_score_histogram': [0] * 10
+}
+
+def metrics_snapshot():
+    """Return a copy of metrics for the control server to expose."""
+    with METRICS_LOCK:
+        return {
+            'events_processed': METRICS['events_processed'],
+            'ai_evaluated': METRICS['ai_evaluated'],
+            'ai_score_histogram': list(METRICS['ai_score_histogram'])
+        }
 def process_event(event: dict) -> None:
     """Process a single Sysmon event"""
     try:
@@ -223,6 +316,13 @@ def process_event(event: dict) -> None:
         
         # Log event summary
         logger.debug(f"EventID={event_id} Time={event_time} Source={source}")
+
+        # metrics: event processed
+        try:
+            with METRICS_LOCK:
+                METRICS['events_processed'] += 1
+        except Exception:
+            logger.debug('Failed to increment events_processed metric')
 
         # Run detection rules
         alerts = suspicious_rule(event)
@@ -341,6 +441,12 @@ def run_agent():
             
             # Register the rejection callback
             control_server.register_rejection_callback(register_rejected_event)
+            # Register metrics provider so the control server /health endpoint
+            # can return runtime counters for the UI to show
+            try:
+                control_server.set_metrics_provider(metrics_snapshot)
+            except Exception:
+                logger.debug("Failed to register metrics provider with ControlServer")
             
             port = control_server.start()
             control_url = f"http://127.0.0.1:{port}"

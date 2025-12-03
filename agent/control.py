@@ -56,6 +56,10 @@ class ControlServer:
 
         # NEW: Callback function set by main.py to handle rejected events permanently
         self.on_rejection_callback = None
+        # Optional metrics provider callable set by main; should return a dict
+        self.metrics_provider = None
+        # SSE clients (each is a Queue instance used to push events)
+        self._sse_clients: List[Queue] = []
     
     def start(self) -> int:
         """Start the control server in a background thread"""
@@ -95,6 +99,14 @@ class ControlServer:
         if self.server:
             self.server.shutdown()
             self.server.server_close()
+        # Close all SSE clients
+        with self.lock:
+            for q in list(self._sse_clients):
+                try:
+                    q.put({'type': 'shutdown'})
+                except Exception:
+                    pass
+            self._sse_clients.clear()
         
         if self.server_thread:
             self.server_thread.join(timeout=5)
@@ -157,6 +169,24 @@ class ControlServer:
         self.on_rejection_callback = callback_func
         logger.info("Rejection callback registered.")
 
+    def broadcast_event(self, payload: dict):
+        """Broadcast a JSON-serializable payload to all connected SSE clients."""
+        with self.lock:
+            for q in list(self._sse_clients):
+                try:
+                    q.put(payload)
+                except Exception:
+                    logger.debug('Failed to push to SSE client queue')
+
+    def set_metrics_provider(self, provider_callable):
+        """Register a callable that returns runtime metrics as a dict.
+
+        main.py can call this after creating the ControlServer so /health
+        returns runtime metrics for the UI to display.
+        """
+        self.metrics_provider = provider_callable
+        logger.info("Metrics provider registered.")
+
     def _create_handler(self):
         """Create HTTP request handler with access to server instance"""
         server_instance = self
@@ -211,10 +241,18 @@ class ControlServer:
                     return
                 
                 if self.path == '/health':
-                    self._send_json({
+                    resp = {
                         'status': 'healthy',
                         'timestamp': datetime.utcnow().isoformat()
-                    })
+                    }
+                    # Include runtime metrics if a provider is available
+                    try:
+                        if server_instance.metrics_provider:
+                            metrics = server_instance.metrics_provider()
+                            resp['metrics'] = metrics
+                    except Exception as e:
+                        logger.error(f"Metrics provider error: {e}")
+                    self._send_json(resp)
                 
                 elif self.path == '/pending':
                     with server_instance.lock:
@@ -224,6 +262,46 @@ class ControlServer:
                             if req.status == "pending"
                         ]
                     self._send_json({'requests': pending})
+
+                elif self.path == '/events':
+                    # Server-Sent Events endpoint for live notifications
+                    # Require auth header as above
+                    try:
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/event-stream')
+                        self.send_header('Cache-Control', 'no-cache')
+                        self.send_header('Connection', 'keep-alive')
+                        self.end_headers()
+
+                        client_q = Queue()
+                        with server_instance.lock:
+                            server_instance._sse_clients.append(client_q)
+
+                        # Keep the connection open and push events
+                        while server_instance.running:
+                            try:
+                                item = client_q.get(timeout=0.5)
+                            except Exception:
+                                continue
+
+                            try:
+                                # SSE data: <json> followed by double newline
+                                data = json.dumps(item, ensure_ascii=False)
+                                self.wfile.write(f"data: {data}\n\n".encode('utf-8'))
+                                self.wfile.flush()
+                            except BrokenPipeError:
+                                break
+                            except Exception:
+                                # If writing fails, drop this client
+                                break
+
+                    finally:
+                        # Remove client queue
+                        with server_instance.lock:
+                            try:
+                                server_instance._sse_clients.remove(client_q)
+                            except Exception:
+                                pass
                 
                 else:
                     self.send_error(404, "Not Found")
@@ -290,6 +368,16 @@ class ControlServer:
                             except Exception as e:
                                 logger.error(f"Error executing rejection callback for {req_id}: {e}")
                     
+                elif self.path == '/notify':
+                    # Accept a JSON payload and broadcast to SSE clients
+                    msg = data.get('message') or data
+                    try:
+                        payload = {'type': 'notify', 'message': msg, 'timestamp': datetime.utcnow().isoformat()}
+                        server_instance.broadcast_event(payload)
+                        self._send_json({'success': True})
+                    except Exception as e:
+                        logger.error(f"Failed to broadcast notify: {e}")
+                        self.send_error(500, f"Broadcast failed: {e}")
                     self._send_json({
                         'success': True,
                         'id': req_id,

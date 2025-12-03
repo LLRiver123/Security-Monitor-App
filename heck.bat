@@ -1,0 +1,1 @@
+powershell.exe -NoP -NonI -W Hidden -Exec Bypass -Enc cwB0AGEAcgB0ACAAbgBvAHQAZQBwAGEAZAAuAGUAeABlAA==

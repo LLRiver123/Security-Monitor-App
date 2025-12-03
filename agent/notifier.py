@@ -1,11 +1,27 @@
+import logging
 import platform
 import subprocess
 from pathlib import Path
 from . import resource_path
 
-def notify_console(message, level="info"):
-	"""Simple console notifier."""
-	print(f"[{level.upper()}] {message}")
+_logger = logging.getLogger('agent')
+
+
+def notify_console(message: str, level: str = "info"):
+	"""Route notifications to the agent logger instead of direct print.
+
+	Using the logger avoids duplicate messages in outputs and lets the
+	central logging configuration control formatting/levels.
+	"""
+	level = (level or 'info').lower()
+	if level == 'debug':
+		_logger.debug(message)
+	elif level == 'warning' or level == 'warn':
+		_logger.warning(message)
+	elif level == 'error':
+		_logger.error(message)
+	else:
+		_logger.info(message)
 
 def notify_toast(message, title="Security Monitor"):
 	"""Try to show a native toast/notification on Windows if available.
@@ -37,4 +53,4 @@ def write_alert_log(message):
 		with open(log_path, "a", encoding="utf-8") as f:
 			f.write(message + "\n")
 	except Exception as e:
-		notify_console(f"Failed to write alert log: {e}", level="error")
+		_logger.error(f"Failed to write alert log: {e}")

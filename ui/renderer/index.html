@@ -230,6 +230,8 @@
             <h2 class="section-title">Agent Logs</h2>
             <div class="log-container" id="logContainer"></div>
         </div>
+        
+
     </div>
 
     <script>
@@ -420,8 +422,20 @@
 
         // Listen for events from main process
         agentAPI.onLog((data) => {
-            const message = typeof data === 'string' ? data : data.message;
+            const raw = typeof data === 'string' ? data : (data.message || '');
             const level = typeof data === 'object' ? data.level : 'info';
+
+            // Detect special user-facing messages emitted by the agent
+            const USER_PREFIX = '[USER_MSG] ';
+            if (raw.startsWith(USER_PREFIX)) {
+                const userText = raw.slice(USER_PREFIX.length).trim();
+                addUserNotification(userText);
+                // Also log for auditing
+                addLog(`(user) ${userText}`, 'info');
+                return;
+            }
+
+            const message = raw;
             addLog(message, level);
         });
 
@@ -439,6 +453,28 @@
         // Make functions available globally for onclick handlers
         window.approveRequest = approveRequest;
         window.rejectRequest = rejectRequest;
+
+        // User notifications
+        let notifications = [];
+        const MAX_NOTIFS = 50;
+
+        function addUserNotification(text) {
+            const ts = new Date().toLocaleTimeString();
+            notifications.push({ text, ts });
+            if (notifications.length > MAX_NOTIFS) notifications = notifications.slice(-MAX_NOTIFS);
+            renderUserNotifications();
+        }
+
+        function renderUserNotifications() {
+            const container = document.getElementById('userNotifications');
+            container.innerHTML = notifications.map(n => `
+                <div class="log-entry log-info">
+                    <span class="timestamp">[${n.ts}]</span>
+                    ${escapeHtml(n.text)}
+                </div>
+            `).join('');
+            container.scrollTop = container.scrollHeight;
+        }
 
         // Initial load
         updateStatus();

@@ -28,9 +28,15 @@ data = joblib.load('agent/ai/lof_model.joblib')
 pipeline = data['pipeline']
 features = data['features']
 
-# Lazy imports
+import threading
+import logging
+
+# Lazy imports / caches
 _model = None
 _np = None
+_model_lock = threading.Lock()
+_st_logger = logging.getLogger('sentence_transformers')
+
 
 
 def _load_numpy():
@@ -46,14 +52,22 @@ def _load_model():
     global _model
     if _model is not None:
         return _model
-    try:
-        from sentence_transformers import SentenceTransformer
+    # Use double-checked locking to avoid racy multi-threaded initialization
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                try:
+                    # Silence noisy loggers from the sentence-transformers stack so
+                    # the agent log stays clean (these libraries print INFO on load).
+                    _st_logger.setLevel(logging.WARNING)
+                    logging.getLogger('sentence_transformers.SentenceTransformer').setLevel(logging.WARNING)
+                    logging.getLogger('transformers').setLevel(logging.WARNING)
+                    from sentence_transformers import SentenceTransformer
 
-        _model = SentenceTransformer('all-MiniLM-L6-v2')
-        return _model
-    except Exception:
-        _model = None
-        return None
+                    _model = SentenceTransformer('all-MiniLM-L6-v2')
+                except Exception:
+                    _model = None
+    return _model
 
 
 def _event_to_text(event: Dict[str, Any]) -> str:
