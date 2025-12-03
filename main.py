@@ -147,6 +147,23 @@ def _execute_remediation_logic(alert: str, event: dict) -> None:
              path_for_cache = image_path
              req_id = confirm_and_disable_path(image_path, alert, event_signature=event_signature)
 
+        elif "Ransomware detected" in alert:
+            if not image_path:
+                return
+            
+            from agent.remediator import confirm_and_disable_path
+            
+            path_for_cache = image_path
+            req_id = confirm_and_disable_path(image_path, alert, event_signature=event_signature)
+
+        elif "Spyware detected" in alert:
+            if not image_path:
+                return
+            
+            destip = data.get('DestinationIp', 'NO_IP')
+            # Queue IP blocking remediation
+            from agent.remediator import block_ip_address
+            req_id = block_ip_address(destip)
         # --- LOGGING & CACHING ---
         if req_id:
             logger.info(f"Remediation queued: id={req_id} path={path_for_cache}")
@@ -344,10 +361,33 @@ def process_event(event: dict) -> None:
 
 def process_alert(alert: str, event: dict) -> None:
     """Process and handle an alert"""
+    global recent_remediations, rejected_remediations # Cần truy cập Cache toàn cục
+    
     try:
+        data = event.get('data', {})
+        image = data.get('Image')
+        dst_ip = data.get('DestinationIp')
+        
+        # 💡 FIX ANTI-SPAM: Kiểm tra Cache TRƯỚC khi in log
+        # Nếu sự kiện này đã nằm trong danh sách "Đã xử lý" hoặc "Đã từ chối", thì im lặng luôn.
+        
+        sigs_to_check = []
+        if image: 
+            sigs_to_check.append(f"FILE:{image}")
+        if dst_ip: 
+            sigs_to_check.append(f"IP:{dst_ip}")
+            
+        for sig in sigs_to_check:
+            if sig in recent_remediations or sig in rejected_remediations:
+                # Event này đã cũ hoặc đã bị xử lý, không in ra nữa để đỡ rối mắt
+                return 
+
+        # -----------------------------------------------------------
+        # Nếu chưa có trong cache, mới bắt đầu in log và xử lý
+        
         event_id = event.get('event_id', 'unknown')
         event_time = event.get('time', 'unknown')
-        pid = event.get('data', {}).get('ProcessId', 'N/A')
+        pid = data.get('ProcessId', 'N/A')
         
         # Format alert message
         alert_msg = (
@@ -371,10 +411,11 @@ def process_alert(alert: str, event: dict) -> None:
         except Exception as e:
             logger.error(f"Failed to write alert log: {e}")
 
-        # Attempt remediation for suspicious executables
+        # Attempt remediation
         _execute_remediation_logic(alert, event)
 
     except Exception as e:
+        logger.error(f"Error processing alert: {e}")
         logger.error(f"Error processing alert: {e}")
 
 def register_rejected_event(event_signature: str) -> None:

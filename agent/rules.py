@@ -58,7 +58,7 @@ LOLBAS_BINS = [
 ]
 
 # Common legitimate ports
-COMMON_PORTS = {"80", "443", "53", "22", "21", "25", "587", "993", "995"}
+COMMON_PORTS = { "443", "53", "22", "21", "25", "587", "993", "995"}
 
 # High-risk temp/public directories (excluding legitimate system paths)
 HIGH_RISK_DIRS = [
@@ -112,10 +112,21 @@ def suspicious_rule(event):
     cmdline = (data.get("CommandLine") or "").lower()
     event_id = event.get("event_id")
 
+    if event_id == 3 :
+        dst_ip = data.get("DestinationIp")
+        if dst_ip == "1.1.1.1" :
+            alerts.append("CRITICAL: Connection to known C2 server 1.1.1.1 detected.")
+            return alerts # Bắt được là return ngay, bất chấp Whitelist
+
+    if "ransomware" in image or "ransomware" in cmdline:
+        alerts.append("CRITICAL: Ransomware behavior detected (Demo Signature).")
+        # Không return ngay để nó có thể dính thêm các rule khác nếu có
+    
+    if "spyware" in image or "spyware" in cmdline:
+        alerts.append("CRITICAL: Spyware behavior detected (Demo Signature).")
+
     if is_whitelisted(image):
         return alerts
-
-    # --- T1059: Command and Scripting Interpreter (High Suspicion) ---
 
     # Rule 1: PowerShell Obfuscation/Evasion (High Suspicion)
     if "powershell" in image or "powershell" in cmdline:

@@ -70,6 +70,29 @@ def confirm_and_disable_path(path: str, reason: str = "Suspicious activity detec
     
     return req_id
 
+def block_ip_address(ip_address: str) -> bool:
+    """
+    Block an IP address using Windows Firewall.
+    Requires Administrator privileges.
+    """
+    try:
+        subprocess.run(
+            ['netsh', 'advfirewall', 'firewall', 'add', 'rule',
+             f'name=Block IP {ip_address}', 'dir=in', 'action=block',
+             f'remoteip={ip_address}'],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+        logger.info(f"Successfully blocked IP address: {ip_address}")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to block IP address {ip_address}: {e.stderr.strip()}")
+        return False
+    except Exception as e:
+        logger.error(f"System error during IP blocking: {e}")
+        return False
+
 def terminate_process(pid: int) -> bool:
     """Kill a process by its PID."""
     try:
@@ -103,37 +126,48 @@ def terminate_process(pid: int) -> bool:
 def terminate_process_by_path(file_path: Path) -> bool:
     """
     Finds and kills any process running from the specific file path.
-    Includes a 'Nuclear Option' (taskkill) to ensure visual cleanup for demos.
+    Includes safeguards to prevent the Agent from killing itself.
     """
     killed_something = False
-    target_name = file_path.name  # e.g., "ransomware.exe"
+    target_name = file_path.name.lower()  # e.g., "ransomware.exe" or "python.exe"
+    
+    # 💡 Lấy PID của chính Agent để tránh tự sát
+    MY_PID = os.getpid()
     
     try:
-        # Method 1: Surgical Kill (via psutil)
+        # Method 1: Surgical Kill (via psutil) - SAFE MODE
         # Normalize path for comparison
         target_path = str(file_path.resolve()).lower()
         
         for proc in psutil.process_iter(['pid', 'name', 'exe']):
             try:
+                # Bỏ qua chính mình
+                if proc.info['pid'] == MY_PID:
+                    continue
+
+                # Check if it matches the target path
                 if proc.info['exe'] and proc.info['exe'].lower() == target_path:
                     logger.warning(f"Found active process {proc.info['name']} (PID: {proc.info['pid']}). Killing...")
                     proc.kill()
                     killed_something = True
+                    
             except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                 continue
 
         # Method 2: The "Nuclear Option" (Taskkill by Name)
-        # This guarantees the window closes even if PIDs don't match or if there are child processes.
-        # We only run this if the file exists to avoid collateral damage.
+        # 💡 FIX: KHÔNG chạy lệnh này nếu mục tiêu là python.exe
+        # Vì taskkill /IM python.exe sẽ giết cả Agent!
         if file_path.exists():
-            logger.info(f"Executing forcing cleanup: taskkill /F /IM {target_name}")
-            # stdout=subprocess.DEVNULL hides the command output from your logs to keep them clean
-            subprocess.run(
-                ["taskkill", "/F", "/IM", target_name], 
-                stdout=subprocess.DEVNULL, 
-                stderr=subprocess.DEVNULL
-            )
-            killed_something = True
+            if target_name == "python.exe":
+                logger.info("Target is python.exe. Skipping 'taskkill /IM' to prevent Agent suicide.")
+            else:
+                logger.info(f"Executing forcing cleanup: taskkill /F /IM {target_name}")
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", target_name], 
+                    stdout=subprocess.DEVNULL, 
+                    stderr=subprocess.DEVNULL
+                )
+                killed_something = True
 
         if killed_something:
             time.sleep(1.5) # Wait for Windows to clean up handles
@@ -148,6 +182,10 @@ def execute_remediation(path: str, action: str = "quarantine") -> bool:
     """
     Execute the actual remediation action with Retry Logic and Process Killing.
     """
+    if path.startswith("IP:"):
+        ip_address = path.replace("IP:", "")
+        return block_ip_address(ip_address)
+
     # 1. Handle System Objects (User)
     if path.startswith("USER:"):
         username = path.replace("USER:", "")
