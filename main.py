@@ -509,33 +509,41 @@ def run_agent():
         error_count = 0
         
         while not shutdown_requested:
+            events_found_in_batch = 0 # Biến đếm cho Smart Polling
+            
             try:
-                for event in sysmon_event_stream_reverse(max_events=500):
+                # Lấy tối đa 100 event mỗi lần để xử lý nhanh hơn
+                for event in sysmon_event_stream_reverse(max_events=100):
                     if shutdown_requested:
                         break
+                    
                     process_event(event)
                     event_count += 1
-                    check_pending_and_execute()
-                # Sleep briefly to avoid tight loop
-                
+                    events_found_in_batch += 1
                     
+                    # Kiểm tra lệnh từ UI liên tục, không chờ hết vòng lặp
+                    check_pending_and_execute() 
+
             except Exception as e:
                 error_count += 1
                 logger.error(f"Event processing error: {e}")
                 logger.debug(traceback.format_exc())
                 
-                # Exit if too many errors
                 if error_count > 100:
                     logger.critical("Too many errors, shutting down")
                     break
+
+            # --- SMART POLLING LOGIC (QUAN TRỌNG) ---
             if not shutdown_requested:
-                logger.info(f"Finished reverse fetch. Waiting {REVERSE_POLL_INTERVAL}s.")
-                # Sử dụng vòng lặp nhỏ để kiểm tra cờ tắt máy (giúp tắt nhanh)
-                for _ in range(int(REVERSE_POLL_INTERVAL / 0.1)): 
-                    if shutdown_requested:
-                        print("Shutdown requested, exiting wait loop")
-                        break 
-                    time.sleep(0.1)
+                if events_found_in_batch > 0:
+                    # Nếu vừa bắt được sự kiện, có thể còn nữa -> KHÔNG NGỦ, quay lại quét ngay
+                    # (Giúp xử lý Ransomware tốc độ cao)
+                    time.sleep(0.2)  # Nghỉ rất ngắn để nhả CPU
+                    continue 
+                else:
+                    # Nếu không có gì, nghỉ một chút để nhả CPU
+                    time.sleep(REVERSE_POLL_INTERVAL)
+
         logger.info(f"Agent stopped. Processed {event_count} total events")
 
     except KeyboardInterrupt:

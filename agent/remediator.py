@@ -67,7 +67,43 @@ def confirm_and_disable_path(path: str, reason: str = "Suspicious activity detec
     # Queue the request
     req_id = control_server.queue_request(path, reason, event_signature=event_signature)
     logger.info(f"Remediation request queued: {req_id} for path={path}")
-    
+
+    # Lightweight policy evaluation: allow auto-approve / auto-reject in safe cases.
+    try:
+        # Import at runtime to avoid circular imports during module load
+        from agent import policy as _policy
+        decision = _policy.evaluate_request(path, reason, event_signature)
+        logger.debug(f"Policy decision for {req_id}: {decision}")
+    except Exception as e:
+        logger.debug(f"Policy evaluation skipped/failed: {e}")
+        decision = 'manual'
+
+    try:
+        if decision == 'approve':
+            with control_server.lock:
+                request = control_server.pending_requests.get(req_id)
+                if request and request.status == 'pending':
+                    request.status = 'approved'
+                    logger.info(f"Request {req_id} auto-approved by policy")
+
+        elif decision == 'reject':
+            with control_server.lock:
+                request = control_server.pending_requests.get(req_id)
+                if request and request.status == 'pending':
+                    request.status = 'rejected'
+                    logger.info(f"Request {req_id} auto-rejected by policy")
+
+            # Trigger the control server's rejection callback if available
+            try:
+                if event_signature and getattr(control_server, 'on_rejection_callback', None):
+                    control_server.on_rejection_callback(event_signature)
+                    logger.debug(f"Invoked rejection callback for signature: {event_signature}")
+            except Exception as e:
+                logger.error(f"Error running rejection callback for {req_id}: {e}")
+
+    except Exception:
+        logger.debug('Error applying policy decision, leaving request pending')
+
     return req_id
 
 def block_ip_address(ip_address: str) -> bool:

@@ -297,15 +297,15 @@
                 }
 
                 container.innerHTML = requests.map(req => `
-                    <div class="pending-request">
+                    <div class="pending-request" id="request-${req.id}">
                         <div class="request-path">${escapeHtml(req.path)}</div>
                         <div class="request-reason">${escapeHtml(req.reason || 'No reason provided')}</div>
                         <div class="timestamp">${formatTimestamp(req.timestamp)}</div>
                         <div class="request-actions">
-                            <button class="btn-approve" onclick="approveRequest('${req.id}')">
+                            <button id="approve-${req.id}" class="btn-approve" onclick="approveRequest('${req.id}')">
                                 ✓ Approve
                             </button>
-                            <button class="btn-reject" onclick="rejectRequest('${req.id}')">
+                            <button id="reject-${req.id}" class="btn-reject" onclick="rejectRequest('${req.id}')">
                                 ✗ Reject
                             </button>
                         </div>
@@ -319,31 +319,75 @@
 
         // Approve remediation request
         async function approveRequest(id) {
+            // Optimistic, non-blocking UI update to avoid freezing the renderer
             try {
-                const result = await agentAPI.approve(id);
-                if (result.error) {
-                    addLog(`Error approving request: ${result.error}`, 'error');
-                } else {
-                    addLog(`Request approved: ${id}`, 'info');
-                }
-                await updatePendingRequests();
+                const approveBtn = document.getElementById(`approve-${id}`);
+                const rejectBtn = document.getElementById(`reject-${id}`);
+                // Disable both actions immediately
+                if (approveBtn) { approveBtn.disabled = true; approveBtn.textContent = 'Approving...'; }
+                if (rejectBtn) { rejectBtn.disabled = true; }
+
+                addLog(`Approving request: ${id}`, 'info');
+
+                // Call agent API but don't block the UI thread; handle response asynchronously
+                agentAPI.approve(id).then((result) => {
+                    if (result && result.error) {
+                        addLog(`Error approving request: ${result.error}`, 'error');
+                        if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
+                        if (rejectBtn) { rejectBtn.disabled = false; }
+                    } else {
+                        addLog(`Request approved: ${id}`, 'info');
+                        // Remove the request element from DOM immediately for responsiveness
+                        const reqEl = document.getElementById(`request-${id}`);
+                        if (reqEl && reqEl.parentNode) reqEl.parentNode.removeChild(reqEl);
+                    }
+
+                    // Refresh pending list in background
+                    setTimeout(updatePendingRequests, 500);
+                }).catch((err) => {
+                    addLog(`Failed to approve request: ${err && err.message ? err.message : err}`, 'error');
+                    if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
+                    if (rejectBtn) { rejectBtn.disabled = false; }
+                    setTimeout(updatePendingRequests, 1000);
+                });
+
             } catch (err) {
-                addLog(`Failed to approve request: ${err.message}`, 'error');
+                addLog(`Failed to initiate approve: ${err && err.message ? err.message : err}`, 'error');
+                setTimeout(updatePendingRequests, 1000);
             }
         }
 
         // Reject remediation request
         async function rejectRequest(id) {
             try {
-                const result = await agentAPI.reject(id);
-                if (result.error) {
-                    addLog(`Error rejecting request: ${result.error}`, 'error');
-                } else {
-                    addLog(`Request rejected: ${id}`, 'info');
-                }
-                await updatePendingRequests();
+                const approveBtn = document.getElementById(`approve-${id}`);
+                const rejectBtn = document.getElementById(`reject-${id}`);
+                if (approveBtn) { approveBtn.disabled = true; }
+                if (rejectBtn) { rejectBtn.disabled = true; rejectBtn.textContent = 'Rejecting...'; }
+
+                addLog(`Rejecting request: ${id}`, 'info');
+
+                agentAPI.reject(id).then((result) => {
+                    if (result && result.error) {
+                        addLog(`Error rejecting request: ${result.error}`, 'error');
+                        if (approveBtn) { approveBtn.disabled = false; }
+                        if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = '✗ Reject'; }
+                    } else {
+                        addLog(`Request rejected: ${id}`, 'info');
+                        const reqEl = document.getElementById(`request-${id}`);
+                        if (reqEl && reqEl.parentNode) reqEl.parentNode.removeChild(reqEl);
+                    }
+                    setTimeout(updatePendingRequests, 500);
+                }).catch((err) => {
+                    addLog(`Failed to reject request: ${err && err.message ? err.message : err}`, 'error');
+                    if (approveBtn) { approveBtn.disabled = false; }
+                    if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = '✗ Reject'; }
+                    setTimeout(updatePendingRequests, 1000);
+                });
+
             } catch (err) {
-                addLog(`Failed to reject request: ${err.message}`, 'error');
+                addLog(`Failed to initiate reject: ${err && err.message ? err.message : err}`, 'error');
+                setTimeout(updatePendingRequests, 1000);
             }
         }
 
