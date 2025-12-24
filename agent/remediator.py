@@ -388,40 +388,53 @@ def queue_process_termination(pid: int, reason: str = "Malicious Process detecte
 def check_pending_and_execute():
     """
     Checks pending requests and executes them.
+    Does NOT hold the lock during execution to avoid blocking the UI.
     """
     control_server = get_control_server()
     if not control_server:
         return
     
-    requests_to_remove = []
+    # 1. Identify requests to process (Copy data out of lock)
+    requests_to_process = []
     
     with control_server.lock:
         for req_id, request in list(control_server.pending_requests.items()):
+            if request.status in ("approved", "rejected"):
+                # We work on a snapshot or reference, but action is taken outside
+                requests_to_process.append((req_id, request.status, request.path, request))
+
+    # 2. Execute actions OUTSIDE the lock
+    completed_ids = []
+    
+    for req_id, status, path, request_obj in requests_to_process:
+        if status == "approved":
+            logger.info(f"Executing approved remediation: {req_id} ({path})")
             
-            if request.status == "approved":
-                logger.info(f"Executing approved remediation: {req_id} ({request.path})")
-                
-                # Call our robust execute function
-                # We force 'quarantine' for files as it's the safest demo action
-                success = execute_remediation(request.path, action="quarantine")
-                
-                if success:
-                    request.status = "completed"
-                    logger.info(f"Remediation completed: {req_id}")
-                else:
-                    request.status = "failed"
-                    logger.error(f"Remediation failed: {req_id}")
-                
-                requests_to_remove.append(req_id)
+            # Call our robust execute function
+            success = execute_remediation(path, action="quarantine")
+            
+            # We can update the object status safely if we assume only this thread acts on 'approved' items
+            # But strictly speaking, we should probably lock again if we modify shared state.
+            # However, 'pending_requests' holds the reference.
+            if success:
+                request_obj.status = "completed"
+                logger.info(f"Remediation completed: {req_id}")
+            else:
+                request_obj.status = "failed"
+                logger.error(f"Remediation failed: {req_id}")
+            
+            completed_ids.append(req_id)
 
-            elif request.status == "rejected":
-                logger.info(f"Remediation rejected by user: {req_id}")
-                requests_to_remove.append(req_id)
+        elif status == "rejected":
+            logger.info(f"Remediation rejected by user: {req_id}")
+            completed_ids.append(req_id)
 
-        # Cleanup
-        for req_id in requests_to_remove:
-            if req_id in control_server.pending_requests:
-                del control_server.pending_requests[req_id]
+    # 3. Cleanup (Re-acquire lock)
+    if completed_ids:
+        with control_server.lock:
+            for req_id in completed_ids:
+                if req_id in control_server.pending_requests:
+                    del control_server.pending_requests[req_id]
 
 def restore_from_quarantine(quarantine_path: str) -> bool:
     """Restore a quarantined file to its original location."""

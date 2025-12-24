@@ -484,6 +484,24 @@ ipcMain.handle('agent-reject', async (evt, id) => {
 	}
 })
 
+ipcMain.handle('agent-set-config', async (evt, config) => {
+	if (!controlUrl) {
+		return { error: 'No control URL available' }
+	}
+
+	try {
+		const res = await httpRequest('POST', `${controlUrl}/config`, config)
+		
+		if (res.statusCode !== 200) {
+			return { error: `HTTP ${res.statusCode}`, details: res.body }
+		}
+		
+		return res.body || { success: true }
+	} catch (e) {
+		return { error: e.message }
+	}
+})
+
 // ===== App Lifecycle =====
 
 app.whenReady().then(() => {

@@ -541,8 +541,14 @@ def run_agent():
                     time.sleep(0.2)  # Nghỉ rất ngắn để nhả CPU
                     continue 
                 else:
-                    # Nếu không có gì, nghỉ một chút để nhả CPU
-                    time.sleep(REVERSE_POLL_INTERVAL)
+                    # Nếu không có gì, nghỉ một chút nhưng vẫn check remediation
+                    # Thay vì ngủ 1 cục 10s, ta ngủ 50 lần 0.2s = 10s
+                    # Để UI vẫn phản hồi mượt mà
+                    steps = int(REVERSE_POLL_INTERVAL / 0.2)
+                    for _ in range(steps):
+                        if shutdown_requested: break
+                        time.sleep(0.2)
+                        check_pending_and_execute()
 
         logger.info(f"Agent stopped. Processed {event_count} total events")
 

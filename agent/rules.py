@@ -1,4 +1,6 @@
 import re
+import time
+from collections import deque
 
 # Simple whitelist for common benign images (lowercase)
 # NOTE: This list should be significantly expanded in a real environment.
@@ -10,6 +12,8 @@ WHITELIST_IMAGES = {
     r"c:\windows\system32\runtimebroker.exe",
     r"c:\windows\system32\dllhost.exe",
     r"c:\windows\system32\taskhostw.exe",
+    r"c:\windows\explorer.exe",
+    r"c:\program files\git\mingw64\bin\git.exe",
 }
 
 # Whitelist patterns for legitimate applications (use 'in' check, so partial match)
@@ -19,10 +23,12 @@ WHITELIST_PATTERNS = [
     # "\\program files (x86)\\",
     "\\windows defender\\",
     "\\githubdesktop\\",
+    "\\vscode\\",
+    "\\microsoft vs code\\",
     # "\\google\\chrome\\",
     # "\\mozilla firefox\\",
     # "\\microsoft\\edge\\",
-    "python.exe",  # Python interpreter
+    # "python.exe",  # REMOVED for Demo: allow python scripts to trigger rules
     "git-remote-https.exe",  # Git operations
 ]
 
@@ -76,6 +82,47 @@ SUSPICIOUS_CMD_PARENTS = [
     "sqlservr.exe",
 ]
 
+# --- RANSOMWARE BEHAVIOR TRACKING ---
+# Map: process_path -> deque([timestamp1, timestamp2, ...])
+_file_mod_tracker = {}
+RANSOMWARE_THRESHOLD = 5  # Number of file mods
+RANSOMWARE_WINDOW = 3.0   # Time window in seconds
+
+def check_ransomware_behavior(image: str, event_id: int) -> bool:
+    """
+    Detects if a specific process is modifying/deleting files rapidly.
+    """
+    if not image:
+        return False
+        
+    # Ignore whitelisted processes (like Explorer, git, installer)
+    if is_whitelisted(image):
+        return False
+
+    # Only care about FileCreate (11), FileCreateTime (2), FileDelete (23, 26)
+    if event_id not in [11, 23, 26]:
+        return False
+
+    now = time.time()
+    
+    if image not in _file_mod_tracker:
+        _file_mod_tracker[image] = deque()
+    
+    timestamps = _file_mod_tracker[image]
+    timestamps.append(now)
+    
+    # Remove old events outside the window
+    while timestamps and (now - timestamps[0] > RANSOMWARE_WINDOW):
+        timestamps.popleft()
+        
+    # Check threshold
+    if len(timestamps) >= RANSOMWARE_THRESHOLD:
+        # Clear tracker to avoid spamming alerts for the same burst
+        timestamps.clear() 
+        return True
+        
+    return False
+
 def is_whitelisted(image):
     """Check if the image is in the simple whitelist or matches whitelist patterns."""
     if not image:
@@ -111,6 +158,12 @@ def suspicious_rule(event):
     parent = (data.get("ParentImage") or "").lower()
     cmdline = (data.get("CommandLine") or "").lower()
     event_id = event.get("event_id")
+
+    # --- BEHAVIORAL CHECK: Ransomware (Rapid File Mod) ---
+    if check_ransomware_behavior(image, event_id):
+         # Get TargetFilename to see what is being touched
+         target_file = data.get("TargetFilename", "unknown file")
+         alerts.append(f"CRITICAL: Ransomware detected! Rapid file modification by {image} on {target_file}")
 
     if event_id == 3 :
         dst_ip = data.get("DestinationIp")

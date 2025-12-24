@@ -3,530 +3,390 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Security Agent Control</title>
+    <title>Security Agent Monitor</title>
+    <!-- Use Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg-dark: #121212;
+            --bg-card: #1e1e1e;
+            --bg-hover: #2d2d2d;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0a0;
+            --accent-blue: #2196f3;
+            --accent-green: #00e676;
+            --accent-red: #ff1744;
+            --accent-orange: #ff9100;
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #1e1e1e;
-            color: #e0e0e0;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        h1 {
-            color: #4fc3f7;
-            margin-bottom: 20px;
-        }
-
-        .controls {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            height: 100vh;
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            flex-direction: column;
+            overflow: hidden;
         }
 
-        button {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        button:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-        }
-
-        button:active {
-            transform: translateY(0);
-        }
-
-        .btn-start {
-            background: #4caf50;
-            color: white;
-        }
-
-        .btn-stop {
-            background: #f44336;
-            color: white;
-        }
-
-        .btn-refresh {
-            background: #2196f3;
-            color: white;
-        }
-
-        .btn-approve {
-            background: #4caf50;
-            color: white;
-            padding: 5px 15px;
-            font-size: 12px;
-        }
-
-        .btn-reject {
-            background: #f44336;
-            color: white;
-            padding: 5px 15px;
-            font-size: 12px;
-        }
-
-        .status {
-            background: #2a2a2a;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
-        .status-item {
+        /* HEADER */
+        header {
+            background-color: var(--bg-card);
+            padding: 15px 25px;
             display: flex;
             justify-content: space-between;
-            margin: 5px 0;
+            align-items: center;
+            border-bottom: 1px solid #333;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+            z-index: 10;
         }
 
-        .status-label {
-            color: #999;
-        }
-
-        .status-value {
-            color: #4fc3f7;
-            font-weight: 500;
-        }
-
-        .status-running {
-            color: #4caf50;
-        }
-
-        .status-stopped {
-            color: #f44336;
-        }
-
-        .section {
-            background: #2a2a2a;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-
-        .section-title {
-            color: #4fc3f7;
-            margin-bottom: 15px;
-            font-size: 18px;
-        }
-
-        .log-container {
-            background: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 4px;
-            padding: 10px;
-            max-height: 300px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-        }
-
-        .log-entry {
-            padding: 4px 0;
-            border-bottom: 1px solid #252525;
-        }
-
-        .log-entry:last-child {
-            border-bottom: none;
-        }
-
-        .log-info {
-            color: #e0e0e0;
-        }
-
-        .log-warning {
-            color: #ff9800;
-        }
-
-        .log-error {
-            color: #f44336;
-        }
-
-        .pending-request {
-            background: #333;
-            padding: 15px;
-            border-radius: 4px;
-            margin-bottom: 10px;
-            border-left: 3px solid #ff9800;
-        }
-
-        .request-path {
-            color: #4fc3f7;
-            font-weight: 500;
-            margin-bottom: 5px;
-            word-break: break-all;
-        }
-
-        .request-reason {
-            color: #999;
-            font-size: 13px;
-            margin-bottom: 10px;
-        }
-
-        .request-actions {
+        .brand {
             display: flex;
-            gap: 10px;
+            align-items: center;
+            gap: 15px;
         }
 
-        .empty-state {
-            color: #666;
-            text-align: center;
+        .brand h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: linear-gradient(90deg, #2196f3, #00e676);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-badge {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .status-badge.active { background: rgba(0, 230, 118, 0.15); color: var(--accent-green); border: 1px solid rgba(0, 230, 118, 0.3); }
+        .status-badge.inactive { background: rgba(255, 23, 68, 0.15); color: var(--accent-red); border: 1px solid rgba(255, 23, 68, 0.3); }
+
+        .controls { display: flex; gap: 10px; }
+        
+        button {
+            background: var(--bg-hover);
+            border: 1px solid #444;
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            font-size: 13px;
+            transition: all 0.2s ease;
+        }
+        button:hover { background: #333; transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
+        
+        .btn-primary { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+        .btn-primary:hover { background: #1976d2; }
+        .btn-danger { background: rgba(255, 23, 68, 0.1); border-color: var(--accent-red); color: var(--accent-red); }
+        .btn-danger:hover { background: var(--accent-red); color: white; }
+
+        /* MAIN CONTENT */
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 350px 1fr; /* Sidebar | Main Dashboard */
+            gap: 20px;
             padding: 20px;
-            font-style: italic;
+            overflow: hidden;
         }
 
-        .timestamp {
-            color: #666;
-            font-size: 11px;
+        /* SIDEBAR (Threats & Pending) */
+        aside {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
         }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid #333;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .card-header {
+            padding: 15px;
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .card-title { font-size: 14px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; }
+
+        /* Threat Monitor Circle */
+        .threat-monitor {
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            position: relative;
+        }
+
+        .pulse-ring {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 4px solid var(--accent-green);
+            box-shadow: 0 0 20px rgba(0, 230, 118, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.5s ease;
+            position: relative;
+        }
+        
+        /* Threat Level Classes */
+        .threat-safe .pulse-ring { border-color: var(--accent-green); box-shadow: 0 0 20px rgba(0, 230, 118, 0.2); }
+        .threat-warning .pulse-ring { border-color: var(--accent-orange); box-shadow: 0 0 30px rgba(255, 145, 0, 0.4); animation: pulse-orange 2s infinite; }
+        .threat-critical .pulse-ring { border-color: var(--accent-red); box-shadow: 0 0 40px rgba(255, 23, 68, 0.6); animation: pulse-red 1s infinite; }
+
+        @keyframes pulse-red { 0% { box-shadow: 0 0 0 0 rgba(255, 23, 68, 0.7); } 70% { box-shadow: 0 0 0 20px rgba(255, 23, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 23, 68, 0); } }
+        @keyframes pulse-orange { 0% { box-shadow: 0 0 0 0 rgba(255, 145, 0, 0.7); } 70% { box-shadow: 0 0 0 15px rgba(255, 145, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 145, 0, 0); } }
+
+        .threat-score { font-size: 32px; font-weight: 700; color: white; }
+        .threat-label { margin-top: 15px; font-size: 18px; font-weight: 600; }
+        
+        /* Pending Actions List */
+        .pending-list {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+            max-height: 400px;
+        }
+
+        .pending-item {
+            background: rgba(255, 145, 0, 0.1);
+            border-left: 3px solid var(--accent-orange);
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            animation: slideIn 0.3s ease;
+        }
+        .pending-item.critical {
+            background: rgba(255, 23, 68, 0.15);
+            border-left: 3px solid var(--accent-red);
+        }
+
+        .p-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; color: #fff; }
+        .p-path { font-family: 'Roboto Mono', monospace; font-size: 11px; color: var(--text-secondary); word-break: break-all; margin-bottom: 8px; }
+        .p-actions { display: flex; gap: 8px; }
+        
+        .btn-sm { padding: 4px 10px; font-size: 11px; }
+        .btn-approve { background: var(--accent-green); border: none; color: #000; font-weight: 600; }
+        .btn-reject { background: var(--accent-red); border: none; color: #fff; font-weight: 600; }
+
+        /* DASHBOARD (Logs & Graph) */
+        .dashboard-main {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: 100%;
+        }
+
+        /* Console Log */
+        .console-container {
+            flex: 1;
+            background: #000;
+            border-radius: 8px;
+            padding: 15px;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 12px;
+            overflow-y: auto;
+            border: 1px solid #333;
+            color: #bbb;
+        }
+
+        .log-line { margin-bottom: 4px; line-height: 1.4; border-bottom: 1px solid #111; padding-bottom: 2px;}
+        .log-time { color: #555; margin-right: 10px; user-select: none; }
+        .log-info { color: #81d4fa; }
+        .log-warn { color: #ffcc80; }
+        .log-error { color: #ff8a80; }
+        .log-critical { color: #ff1744; font-weight: bold; background: rgba(255, 23, 68, 0.1); padding: 2px; display: block;}
+        
+        /* TOGGLE SWITCH */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            margin-right: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 5px 10px;
+            border-radius: 20px;
+            border: 1px solid #444;
+        }
+        .toggle-label { font-size: 12px; font-weight: 600; margin-right: 8px; color: #ccc; }
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 34px;
+            height: 18px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #555;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 12px;
+            width: 12px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider { background-color: var(--accent-red); }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+        /* THREAT OVERLAY */
+        #threatOverlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(255,23,68,0) 0%, rgba(255,23,68,0.2) 80%, rgba(255,23,68,0.6) 100%);
+            pointer-events: none;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            mix-blend-mode: hard-light;
+            animation: none;
+        }
+        @keyframes flashRed {
+            0% { opacity: 0; }
+            50% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            height: 100px;
+        }
+        .stat-box {
+            background: var(--bg-card);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .stat-val { font-size: 24px; font-weight: 700; color: #fff; }
+        .stat-lbl { font-size: 12px; color: var(--text-secondary); text-transform: uppercase; }
+
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1> Security Agent Control Panel</h1>
-
-        <div class="controls">
-            <button class="btn-start" id="startBtn">Start Agent</button>
-            <button class="btn-stop" id="stopBtn">Stop Agent</button>
-            <button class="btn-refresh" id="refreshBtn">Refresh Status</button>
-        </div>
-
-        <div class="status" id="status">
-            <div class="status-item">
-                <span class="status-label">Status:</span>
-                <span class="status-value" id="statusValue">Unknown</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Control URL:</span>
-                <span class="status-value" id="controlUrl">N/A</span>
-            </div>
-            <div class="status-item">
-                <span class="status-label">Health:</span>
-                <span class="status-value" id="healthStatus">Checking...</span>
-            </div>
-        </div>
-
-        <div class="section">
-            <h2 class="section-title">Pending Remediation Requests</h2>
-            <div id="pendingRequests"></div>
-        </div>
-
-        <div class="section">
-            <h2 class="section-title">Agent Logs</h2>
-            <div class="log-container" id="logContainer"></div>
+    <header>
+        <div class="brand">
+            <h1>🛡️ Security Monitor</h1>
+            <div id="agentStatus" class="status-badge inactive">STOPPED</div>
         </div>
         
+        <div style="flex:1;"></div>
 
-    </div>
+        <div class="toggle-container">
+            <span class="toggle-label">AUTO-REMEDIATION</span>
+            <label class="switch">
+                <input type="checkbox" id="toggleAutoRemediate">
+                <span class="slider"></span>
+            </label>
+        </div>
 
-    <script>
-        // const { agentAPI } = window;
-        const MAX_LOGS = 500;
-        let logs = [];
+        <div class="controls">
+            <button id="btnStart" class="btn-primary">▶ Start Agent</button>
+            <button id="btnStop" class="btn-danger">⏹ Stop Agent</button>
+            <button id="btnClear" onclick="clearLogs()">🗑 Clear Logs</button>
+        </div>
+    </header>
 
-        // Update status display
-        async function updateStatus() {
-            try {
-                const status = await agentAPI.getStatus();
-                const statusEl = document.getElementById('statusValue');
-                
-                if (status.running) {
-                    statusEl.textContent = 'Running';
-                    statusEl.className = 'status-value status-running';
-                } else {
-                    statusEl.textContent = 'Stopped';
-                    statusEl.className = 'status-value status-stopped';
-                }
-
-                document.getElementById('controlUrl').textContent = 
-                    status.controlUrl || 'N/A';
-
-                // Check health if running
-                if (status.running && status.controlUrl) {
-                    const health = await agentAPI.checkHealth();
-                    const healthEl = document.getElementById('healthStatus');
-                    
-                    if (health.healthy) {
-                        healthEl.textContent = 'Healthy';
-                        healthEl.className = 'status-value status-running';
-                    } else {
-                        healthEl.textContent = 'Unhealthy';
-                        healthEl.className = 'status-value status-stopped';
-                    }
-                } else {
-                    document.getElementById('healthStatus').textContent = 'N/A';
-                    document.getElementById('healthStatus').className = 'status-value';
-                }
-
-            } catch (err) {
-                console.error('Failed to update status:', err);
-            }
-        }
-
-        // Update pending requests
-        async function updatePendingRequests() {
-            try {
-                const result = await agentAPI.getPending();
-                const container = document.getElementById('pendingRequests');
-                
-                if (result.error) {
-                    container.innerHTML = `<div class="empty-state">Error: ${result.error}</div>`;
-                    return;
-                }
-
-                const requests = result.requests || [];
-                
-                if (requests.length === 0) {
-                    container.innerHTML = '<div class="empty-state">No pending requests</div>';
-                    return;
-                }
-
-                container.innerHTML = requests.map(req => `
-                    <div class="pending-request" id="request-${req.id}">
-                        <div class="request-path">${escapeHtml(req.path)}</div>
-                        <div class="request-reason">${escapeHtml(req.reason || 'No reason provided')}</div>
-                        <div class="timestamp">${formatTimestamp(req.timestamp)}</div>
-                        <div class="request-actions">
-                            <button id="approve-${req.id}" class="btn-approve" onclick="approveRequest('${req.id}')">
-                                ✓ Approve
-                            </button>
-                            <button id="reject-${req.id}" class="btn-reject" onclick="rejectRequest('${req.id}')">
-                                ✗ Reject
-                            </button>
-                        </div>
-                    </div>
-                `).join('');
-
-            } catch (err) {
-                console.error('Failed to update pending requests:', err);
-            }
-        }
-
-        // Approve remediation request
-        async function approveRequest(id) {
-            // Optimistic, non-blocking UI update to avoid freezing the renderer
-            try {
-                const approveBtn = document.getElementById(`approve-${id}`);
-                const rejectBtn = document.getElementById(`reject-${id}`);
-                // Disable both actions immediately
-                if (approveBtn) { approveBtn.disabled = true; approveBtn.textContent = 'Approving...'; }
-                if (rejectBtn) { rejectBtn.disabled = true; }
-
-                addLog(`Approving request: ${id}`, 'info');
-
-                // Call agent API but don't block the UI thread; handle response asynchronously
-                agentAPI.approve(id).then((result) => {
-                    if (result && result.error) {
-                        addLog(`Error approving request: ${result.error}`, 'error');
-                        if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
-                        if (rejectBtn) { rejectBtn.disabled = false; }
-                    } else {
-                        addLog(`Request approved: ${id}`, 'info');
-                        // Remove the request element from DOM immediately for responsiveness
-                        const reqEl = document.getElementById(`request-${id}`);
-                        if (reqEl && reqEl.parentNode) reqEl.parentNode.removeChild(reqEl);
-                    }
-
-                    // Refresh pending list in background
-                    setTimeout(updatePendingRequests, 500);
-                }).catch((err) => {
-                    addLog(`Failed to approve request: ${err && err.message ? err.message : err}`, 'error');
-                    if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = '✓ Approve'; }
-                    if (rejectBtn) { rejectBtn.disabled = false; }
-                    setTimeout(updatePendingRequests, 1000);
-                });
-
-            } catch (err) {
-                addLog(`Failed to initiate approve: ${err && err.message ? err.message : err}`, 'error');
-                setTimeout(updatePendingRequests, 1000);
-            }
-        }
-
-        // Reject remediation request
-        async function rejectRequest(id) {
-            try {
-                const approveBtn = document.getElementById(`approve-${id}`);
-                const rejectBtn = document.getElementById(`reject-${id}`);
-                if (approveBtn) { approveBtn.disabled = true; }
-                if (rejectBtn) { rejectBtn.disabled = true; rejectBtn.textContent = 'Rejecting...'; }
-
-                addLog(`Rejecting request: ${id}`, 'info');
-
-                agentAPI.reject(id).then((result) => {
-                    if (result && result.error) {
-                        addLog(`Error rejecting request: ${result.error}`, 'error');
-                        if (approveBtn) { approveBtn.disabled = false; }
-                        if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = '✗ Reject'; }
-                    } else {
-                        addLog(`Request rejected: ${id}`, 'info');
-                        const reqEl = document.getElementById(`request-${id}`);
-                        if (reqEl && reqEl.parentNode) reqEl.parentNode.removeChild(reqEl);
-                    }
-                    setTimeout(updatePendingRequests, 500);
-                }).catch((err) => {
-                    addLog(`Failed to reject request: ${err && err.message ? err.message : err}`, 'error');
-                    if (approveBtn) { approveBtn.disabled = false; }
-                    if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = '✗ Reject'; }
-                    setTimeout(updatePendingRequests, 1000);
-                });
-
-            } catch (err) {
-                addLog(`Failed to initiate reject: ${err && err.message ? err.message : err}`, 'error');
-                setTimeout(updatePendingRequests, 1000);
-            }
-        }
-
-        // Add log entry
-        function addLog(message, level = 'info') {
-            const timestamp = new Date().toLocaleTimeString();
-            logs.push({ message, level, timestamp });
-            
-            // Keep only recent logs
-            if (logs.length > MAX_LOGS) {
-                logs = logs.slice(-MAX_LOGS);
-            }
-
-            renderLogs();
-        }
-
-        // Render logs
-        function renderLogs() {
-            const container = document.getElementById('logContainer');
-            container.innerHTML = logs.map(log => {
-                const msg = typeof log.message === 'string' 
-                    ? log.message 
-                    : log.message.message || JSON.stringify(log.message);
-                
-                return `
-                    <div class="log-entry log-${log.level}">
-                        <span class="timestamp">[${log.timestamp}]</span>
-                        ${escapeHtml(msg)}
-                    </div>
-                `;
-            }).join('');
-            
-            // Auto-scroll to bottom
-            container.scrollTop = container.scrollHeight;
-        }
-
-        // Utility functions
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        function formatTimestamp(iso) {
-            try {
-                return new Date(iso).toLocaleString();
-            } catch {
-                return iso;
-            }
-        }
-
-        // Event listeners
-        document.getElementById('startBtn').addEventListener('click', async () => {
-            addLog('Starting agent...', 'info');
-            const result = await agentAPI.start(); // <-- Dùng tên API ngắn hơn
-            if (result.error) {
-                addLog(`Failed to start: ${result.error}`, 'error');
-            }
-            await updateStatus();
-        });
-
-        document.getElementById('stopBtn').addEventListener('click', async () => {
-            addLog('Stopping agent...', 'info');
-            const result = await agentAPI.stop(); // <-- Dùng tên API ngắn hơn
-            if (result.error) {
-                addLog(`Failed to stop: ${result.error}`, 'error');
-            }
-            await updateStatus();
-        });
-
-        document.getElementById('refreshBtn').addEventListener('click', async () => {
-            await updateStatus();
-            await updatePendingRequests();
-            addLog('Status refreshed', 'info');
-        });
-
-        // Listen for events from main process
-        agentAPI.onLog((data) => {
-            const raw = typeof data === 'string' ? data : (data.message || '');
-            const level = typeof data === 'object' ? data.level : 'info';
-
-            // Detect special user-facing messages emitted by the agent
-            const USER_PREFIX = '[USER_MSG] ';
-            if (raw.startsWith(USER_PREFIX)) {
-                const userText = raw.slice(USER_PREFIX.length).trim();
-                addUserNotification(userText);
-                // Also log for auditing
-                addLog(`(user) ${userText}`, 'info');
-                return;
-            }
-
-            const message = raw;
-            addLog(message, level);
-        });
-
-        agentAPI.onControlUrl((data) => {
-            const url = typeof data === 'string' ? data : data.url;
-            addLog(`Control URL available: ${url}`, 'info');
-            updateStatus();
-        });
-
-        agentAPI.onAgentExit((data) => {
-            addLog(`Agent exited: code=${data.code} signal=${data.signal}`, 'warning');
-            updateStatus();
-        });
-
-        // Make functions available globally for onclick handlers
-        window.approveRequest = approveRequest;
-        window.rejectRequest = rejectRequest;
-
-        // User notifications
-        let notifications = [];
-        const MAX_NOTIFS = 50;
-
-        function addUserNotification(text) {
-            const ts = new Date().toLocaleTimeString();
-            notifications.push({ text, ts });
-            if (notifications.length > MAX_NOTIFS) notifications = notifications.slice(-MAX_NOTIFS);
-            renderUserNotifications();
-        }
-
-        function renderUserNotifications() {
-            const container = document.getElementById('userNotifications');
-            container.innerHTML = notifications.map(n => `
-                <div class="log-entry log-info">
-                    <span class="timestamp">[${n.ts}]</span>
-                    ${escapeHtml(n.text)}
+    <main>
+        <!-- LEFT COLUMN -->
+        <aside>
+            <!-- THREAT MONITOR -->
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">Threat Monitor</span>
+                    <span id="threat-indicator" style="font-size:10px; color:#666;">LIVE</span>
                 </div>
-            `).join('');
-            container.scrollTop = container.scrollHeight;
-        }
+                <div class="threat-monitor threat-safe" id="threatMonitor">
+                    <div class="pulse-ring">
+                        <span class="threat-score" id="alertCount">0</span>
+                    </div>
+                    <div class="threat-label" id="threatLabel">SAFE</div>
+                </div>
+            </div>
 
-        // Initial load
-        updateStatus();
-        updatePendingRequests();
+            <!-- PENDING REQUESTS -->
+            <div class="card" style="flex: 1;">
+                <div class="card-header">
+                    <span class="card-title">Action Required</span>
+                    <span class="badge" id="pendingCount">0</span>
+                </div>
+                <div class="pending-list" id="pendingList">
+                    <div style="text-align: center; color: #555; padding: 20px; font-size: 12px;">
+                        No pending remediation requests.
+                    </div>
+                </div>
+            </div>
+        </aside>
 
-        // Periodic updates
-        setInterval(updateStatus, 5000);
-        setInterval(updatePendingRequests, 2000);
-    </script>
+        <!-- RIGHT COLUMN -->
+        <div class="dashboard-main">
+            <!-- MINI STATS -->
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <span class="stat-val" id="eventsProcessed">0</span>
+                    <span class="stat-lbl">Events Analyzed</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-val" id="threatsBlocked">0</span>
+                    <span class="stat-lbl">Threats Blocked</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-val" id="uptime">00:00</span>
+                    <span class="stat-lbl">Session Uptime</span>
+                </div>
+            </div>
+
+            <!-- LIVE CONSOLE -->
+            <div class="card" style="flex: 1;">
+                <div class="card-header">
+                    <span class="card-title">Live System Logs</span>
+                    <input type="text" placeholder="Filter logs..." style="background:#111; border:1px solid #333; color:#fff; padding:4px 8px; font-size:11px; border-radius:4px;">
+                </div>
+                <div class="console-container" id="consoleLogs">
+                    <div class="log-line"><span class="log-time">--:--:--</span> <span class="log-info">System ready. Waiting for agent...</span></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div id="threatOverlay"></div>
+    <script src="index.js"></script>
 </body>
 </html>

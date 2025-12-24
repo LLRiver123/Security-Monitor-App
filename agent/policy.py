@@ -11,6 +11,7 @@ Configuration:
 """
 from pathlib import Path
 import os
+from agent.control import get_control_server
 
 
 def evaluate_request(path: str, reason: str = "", event_signature: str = "") -> str:
@@ -18,7 +19,8 @@ def evaluate_request(path: str, reason: str = "", event_signature: str = "") -> 
 
     Rules are intentionally conservative:
     - If AGENT_POLICY_AUTO_APPROVE_ALL=1 -> 'approve'
-    - Do not auto-approve system/process/user/ip objects (return 'manual')
+    - If ControlServer.auto_remediation_enabled=True AND threat is CRITICAL -> 'approve'
+    - Do not auto-approve system/process/user/ip objects (return 'manual') unless Critical & Auto-Remediate
     - Auto-approve obvious demo artifacts (filenames containing 'demo')
     - Default to 'manual'
     """
@@ -26,11 +28,41 @@ def evaluate_request(path: str, reason: str = "", event_signature: str = "") -> 
         if os.getenv('AGENT_POLICY_AUTO_APPROVE_ALL', '0') == '1':
             return 'approve'
 
+        # Check Dynamic UI Config for Auto-Remediation
+        server = get_control_server()
+        if server and server.auto_remediation_enabled:
+            
+            # --- SAFETY NET: SYSTEM IMMUNITY ---
+            # Never auto-kill system processes, even if flagged as critical.
+            # User must manually approve these to prevent system instability.
+            path_lower = path.lower()
+            if "windows\\system32" in path_lower or "windows\\syswow64" in path_lower:
+                return 'manual'
+
+            # --- TARGETED AUTO-REMEDIATION ---
+            reason_lower = reason.lower()
+            
+            # 1. High Confidence: Explicit Ransomware Behavior (Rapid file mods)
+            if "ransomware" in reason_lower:
+                return 'approve'
+
+            # 2. Safe Targets: Explicit Demo/Simulation files
+            if "simulation" in path_lower or "demo" in path_lower or "dummy" in path_lower:
+                return 'approve'
+            
+            # Note: We removed generic "critical" check to avoid killing 
+            # admin PowerShell scripts or other false positives.
+
         if not path:
             return 'manual'
 
         # System/object prefixes: prefer manual handling
         if path.startswith('USER:') or path.startswith('IP:') or path.startswith('pid_'):
+            # Allow auto-remediation for processes ONLY if it's the Ransomware signature
+            if server and server.auto_remediation_enabled and path.startswith('pid_'):
+                 reason_lower = reason.lower()
+                 if "ransomware" in reason_lower:
+                     return 'approve'
             return 'manual'
 
         # For file paths, inspect filename

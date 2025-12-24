@@ -60,6 +60,9 @@ class ControlServer:
         self.metrics_provider = None
         # SSE clients (each is a Queue instance used to push events)
         self._sse_clients: List[Queue] = []
+        
+        # UI Configurable Settings
+        self.auto_remediation_enabled = False
     
     def start(self) -> int:
         """Start the control server in a background thread"""
@@ -243,7 +246,10 @@ class ControlServer:
                 if self.path == '/health':
                     resp = {
                         'status': 'healthy',
-                        'timestamp': datetime.utcnow().isoformat()
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'config': {
+                            'auto_remediation': server_instance.auto_remediation_enabled
+                        }
                     }
                     # Include runtime metrics if a provider is available
                     try:
@@ -340,6 +346,18 @@ class ControlServer:
                         'success': True,
                         'id': req_id,
                         'status': 'approved'
+                    })
+
+                elif self.path == '/config':
+                    if 'auto_remediation' in data:
+                        server_instance.auto_remediation_enabled = bool(data['auto_remediation'])
+                        logger.info(f"Config updated: auto_remediation={server_instance.auto_remediation_enabled}")
+                    
+                    self._send_json({
+                        'success': True,
+                        'config': {
+                            'auto_remediation': server_instance.auto_remediation_enabled
+                        }
                     })
                 
                 elif self.path == '/reject':

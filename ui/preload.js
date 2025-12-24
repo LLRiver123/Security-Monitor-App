@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('agentAPI', {
 	getPending: () => ipcRenderer.invoke('agent-get-pending'),
 	approve: (id) => ipcRenderer.invoke('agent-approve', id),
 	reject: (id) => ipcRenderer.invoke('agent-reject', id),
+	setConfig: (config) => ipcRenderer.invoke('agent-set-config', config),
 	
 	// Event listeners (one-way from main to renderer)
 	onLog: (callback) => {
